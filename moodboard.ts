@@ -395,9 +395,19 @@ function runWindow(config: WindowConfig) {
     return request.pid === process.pid ? request.url : null;
   });
 
+  // ⌘W / Ctrl+W。webview-bun は run() を外から止める口(terminate)を公開していないため、
+  // 窓を閉じたときと同じ後片付けをしてからプロセスごと終える
+  webview.bind("__moodboardClose", () => {
+    cleanupWindow(config);
+    process.exit(0);
+  });
+
   webview.navigate(config.url);
   webview.run(); // ウィンドウを閉じると返る
+  cleanupWindow(config);
+}
 
+function cleanupWindow(config: WindowConfig) {
   // 最初の board が一度も読まれないまま(表示確認前に閉じられた等)窓が終わった場合の掃除。
   // 差し替えで読み込んだ board はそれぞれ __moodboardLoad が読み終えた時点で既に消えている
   rmSync(boardPath(config.requestId), { force: true });

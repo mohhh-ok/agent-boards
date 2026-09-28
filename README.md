@@ -47,6 +47,7 @@ When you find the one you want, tell the agent — or select cards and copy thei
 | `b` | Switch background: dark → checkerboard → white (use checkerboard to check transparency) |
 | slider, `+` / `-` | Change the base size of all cards |
 | `s` | Selection mode (see below) |
+| `⌘W` (`Ctrl+W`) | Close the window. Works in the full-size view and in selection mode too |
 
 In the full-size view: `0` = fit to window, `1` = actual pixels, `2` = 200%, `←` / `→` = previous / next, `m` = sound on/off, `Esc` = close.
 

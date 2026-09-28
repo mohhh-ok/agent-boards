@@ -581,8 +581,8 @@
       copy: function (n) { return "Copy (" + n + ")"; },
       copied: function (n) { return "Copied " + n; },
       copyFailed: "Copy failed",
-      hintDefault: ["wheel=size", "drag=move", "click=open", "r=re-layout", "b=background", "s=select", "+/-=base size", "|", "lightbox: 0=fit", "1=100%", "2=200%", "←/→=prev/next", "m=sound", "Esc=close"],
-      hintSelect: ["click=select", "⌘A=select all", "⌘C=copy", "s or Esc=exit"],
+      hintDefault: ["wheel=size", "drag=move", "click=open", "r=re-layout", "b=background", "s=select", "+/-=base size", "⌘W=close window", "|", "lightbox: 0=fit", "1=100%", "2=200%", "←/→=prev/next", "m=sound", "Esc=close"],
+      hintSelect: ["click=select", "⌘A=select all", "⌘C=copy", "s or Esc=exit", "⌘W=close window"],
       emptyTitle: "moodboard — nothing to show",
       emptyBody: "Open this page with the moodboard command. It takes images, videos (mov/webm/mp4) and audio (wav/mp3/m4a/aac/flac/ogg/opus).",
       emptyUsage: "moodboard [--target <name>] <paths...>\nmoodboard [--target <name>] --json <board.json>\n\nNote: open \"file://...?query\" does not work because macOS drops the query.\nSee README.md for how to open it",
@@ -608,8 +608,8 @@
       copy: function (n) { return "コピー (" + n + ")"; },
       copied: function (n) { return n + " 件コピー"; },
       copyFailed: "コピー失敗",
-      hintDefault: ["wheel=サイズ", "drag=移動", "click=拡大表示", "r=再整列", "b=背景", "s=選択", "+/-=基準サイズ", "|", "lightbox: 0=fit", "1=100%", "2=200%", "←/→=前後", "m=音", "Esc=閉じる"],
-      hintSelect: ["クリック=選択", "⌘A=全選択", "⌘C=コピー", "s か Esc=抜ける"],
+      hintDefault: ["wheel=サイズ", "drag=移動", "click=拡大表示", "r=再整列", "b=背景", "s=選択", "+/-=基準サイズ", "⌘W=窓を閉じる", "|", "lightbox: 0=fit", "1=100%", "2=200%", "←/→=前後", "m=音", "Esc=閉じる"],
+      hintSelect: ["クリック=選択", "⌘A=全選択", "⌘C=コピー", "s か Esc=抜ける", "⌘W=窓を閉じる"],
       emptyTitle: "moodboard — 表示するアイテムがありません",
       emptyBody: "moodboard コマンド経由で開いてください。画像・動画(mov/webm/mp4)・音声(wav/mp3/m4a/aac/flac/ogg/opus)を渡せます。",
       emptyUsage: "moodboard [--target <名前>] <パス...>\nmoodboard [--target <名前>] --json <board.json>\n\n注意: open \"file://...?クエリ\" は macOS がクエリを落とすので不可。\n手順の正は README.md",
@@ -1600,6 +1600,12 @@
 
   // ---------------- keyboard shortcuts ----------------
   function onKeyDown(e) {
+    // ⌘W / Ctrl+W = 窓を閉じる。ライトボックス・選択モード中でも効かせる
+    if ((e.metaKey || e.ctrlKey) && (e.key === "w" || e.key === "W")) {
+      e.preventDefault();
+      if (typeof window.__moodboardClose === "function") window.__moodboardClose();
+      return;
+    }
     if (document.activeElement && document.activeElement.tagName === "INPUT") return;
 
     if (lightboxEl.classList.contains("active")) {
@@ -1640,7 +1646,7 @@
   document.addEventListener("keydown", onKeyDown);
 
   // ---------------- launcher bridge ----------------
-  // __moodboardLoad / __moodboardReady / __moodboardPoll は moodboard.ts が webview.bind で注入する。
+  // __moodboardLoad / __moodboardReady / __moodboardPoll / __moodboardClose は moodboard.ts が webview.bind で注入する。
   // http 経由の検証用ページでは、検証スクリプトが exposeFunction / addInitScript で同名のものを注入する
   function notifyLauncherReady() {
     var requestId = new URLSearchParams(window.location.search).get("rid");
