@@ -1013,8 +1013,9 @@
       timeEl.textContent = formatAudioTime(media.currentTime) + " / " + formatAudioTime(duration);
     });
     // シークし終えたらフォーカスを外す。INPUT にフォーカスが残るとキー操作(Esc・←/→・m 等)が
-    // onKeyDown で無視されたままになる
+    // onKeyDown で無視されたままになる。値を変えずに離した回は change が出ないので mouseup でも外す
     seek.addEventListener("change", function () { seek.blur(); });
+    seek.addEventListener("mouseup", function () { seek.blur(); });
     document.addEventListener("mouseup", function () { seeking = false; });
 
     media.addEventListener("play", syncPlayState);
