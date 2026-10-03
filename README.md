@@ -49,7 +49,7 @@ When you find the one you want, tell the agent — or select cards and copy thei
 | `s` | Selection mode (see below) |
 | `⌘W` (`Ctrl+W`) | Close the window. Works in the full-size view and in selection mode too |
 
-In the full-size view: `0` = fit to window, `1` = actual pixels, `2` = 200%, `←` / `→` = previous / next, `m` = sound on/off, `Esc` = close.
+In the full-size view: `0` = fit to window, `1` = actual pixels, `2` = 200%, `←` / `→` = previous / next, `space` = play / pause a video, `m` = sound on/off, `Esc` = close.
 
 At 200% of the actual pixels or more (on the table or full-size), pixels are shown sharp, without smoothing.
 
@@ -58,6 +58,7 @@ When you resize the window, the cards are re-laid out automatically. Once you ha
 #### Videos and audio
 
 - Videos play muted and on loop on the table. Open one full-size to hear it; sound is on by default there and `m` toggles it
+- A video opened full-size has a control bar with the same play button, seek bar and time as an audio card, so you can pause and jump to any point. Dragging, scrolling or clicking on the bar doesn't move, zoom or close the view
 - An audio card has a play button, a seek bar and the time. Click anywhere on the card to play or pause. The card that is playing turns green
 - Only one thing makes sound at a time: starting an audio card pauses the others, and opening a video full-size pauses any audio card that is playing
 - A file that can't be played shows "Can't play" with its file name. Some VP9 `.webm` files with transparency don't play; HEVC `.mov` with transparency does

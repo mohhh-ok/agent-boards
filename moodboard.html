@@ -6,7 +6,8 @@
 
   動画は拡張子(mov/webm/mp4・大小無視)、音声は拡張子(wav/mp3/m4a/aac/flac/ogg/opus・大小無視)で自動判定する。
   動画は <video autoplay muted loop playsinline> で描画する。ライトテーブル上は全部ミュート(複数が同時に
-  鳴るとうるさい)。音はライトボックスで1本ずつ出す(既定で音あり・m でミュート切替)。透過 alpha 付き待機
+  鳴るとうるさい)。音はライトボックスで1本ずつ出す(既定で音あり・m でミュート切替)。ライトボックスの
+  動画には音声カードと同じ操作バー(再生/一時停止・シークバー・経過/総時間)を付ける。透過 alpha 付き待機
   ループ動画の見比べにも使う想定(背景切替=市松で透過確認)。webm(VP9 alpha)は WKWebView で再生できない
   ことがあり、その場合は再生不可の表示にフォールバックする。
 
@@ -274,10 +275,6 @@
     box-sizing: border-box;
     border: 1px solid var(--border);
     background: var(--card-bg);
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    gap: 6px;
     padding: 8px;
     cursor: pointer; /* ボタン/シークバー以外の領域クリックで再生/一時停止 */
   }
@@ -293,18 +290,27 @@
     box-shadow: 0 0 0 2px rgba(58, 161, 90, 0.5);
     background: rgba(58, 161, 90, 0.22);
   }
-  .item .audio-player.playing .audio-playpause {
+  .item .audio-player audio { display: none; }
+
+  /* ---- player controls(音声カードとライトボックスの動画で共用) ----
+     再生/一時停止ボタン・シークバー・経過/総時間。組み立ては createPlayerControls() */
+  .player-controls {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 6px;
+  }
+  .player-controls.playing .player-playpause {
     background: #3aa15a;
     border-color: #2f8a4c;
     color: #fff;
   }
-  .item .audio-player audio { display: none; }
-  .audio-row {
+  .player-row {
     display: flex;
     align-items: center;
     gap: 8px;
   }
-  .audio-playpause {
+  .player-playpause {
     flex: 0 0 auto;
     width: 26px;
     height: 26px;
@@ -317,12 +323,13 @@
     cursor: pointer;
     padding: 0;
   }
-  .audio-playpause:hover { background: #333; }
-  .audio-seek {
+  .player-playpause:hover { background: #333; }
+  .player-controls.playing .player-playpause:hover { background: #349150; }
+  .player-seek {
     flex: 1 1 auto;
     min-width: 0;
   }
-  .audio-time {
+  .player-time {
     font-variant-numeric: tabular-nums;
     font-size: 11px;
     color: var(--fg-dim);
@@ -337,8 +344,8 @@
      カード高さは AUDIO_CARD_HEIGHT で固定なので縦方向の余白では対応できず、横方向のみで解決する
      (時間表示は元々チェックボックスの下端(28px)より下にあり縦方向では重ならないが、操作行と
      揃えて見た目を統一するために同じ分だけ揃えてずらす) */
-  body.selecting .item .audio-row,
-  body.selecting .item .audio-time {
+  body.selecting .item .player-row,
+  body.selecting .item .player-time {
     padding-left: 24px;
   }
   /* 読み込めなかったカード(.item-ph)の文言も同じ理由でチェックボックスに先頭が隠れていた
@@ -506,6 +513,28 @@
   #lightbox-sound-toggle:hover { background: rgba(40, 40, 40, 0.85); }
   #lightbox-sound-toggle .lightbox-sound-icon { font-size: 16px; line-height: 1; }
   #lightbox-sound-toggle.muted { color: #f0a0a0; border-color: #a04040; }
+
+  /* ---- lightbox video controls ----
+     ブラウザ標準の controls 属性は使わない(動画本体はドラッグ移動・ホイール拡大を受けていて、
+     標準の操作 UI とぶつかるため)。操作 UI は音声カードと同じ部品(.player-controls)で、
+     下端の #lightbox-info・#lightbox-sound-toggle の行より上に置く。#lightbox-backdrop の外に
+     あるので、ここでのクリックはライトボックスを閉じず、mousedown も動画のドラッグにならない。
+     ホイールは JS で止めて拡大させない */
+  #lightbox-controls {
+    display: none; /* 動画を表示しているときだけ JS で flex にする */
+    position: absolute;
+    left: 50%;
+    bottom: 48px;
+    transform: translateX(-50%);
+    width: min(720px, calc(100vw - 24px));
+    box-sizing: border-box;
+    background: rgba(0, 0, 0, 0.75);
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 8px 10px;
+  }
+  /* 動画の上に重なるので、時間表示は他のライトボックス表示(#lightbox-info 等)と同じ明るさにする */
+  #lightbox-controls .player-time { color: #ddd; }
 </style>
 </head>
 <body>
@@ -549,6 +578,7 @@
       <div id="lightbox-error"></div>
     </div>
     <div id="lightbox-info"></div>
+    <div id="lightbox-controls" class="player-controls"></div>
     <button id="lightbox-sound-toggle" type="button" data-i18n-title="soundToggleTitle"></button>
     <button id="lightbox-close" type="button" data-i18n-title="closeTitle">&times;</button>
   </div>
@@ -581,7 +611,7 @@
       copy: function (n) { return "Copy (" + n + ")"; },
       copied: function (n) { return "Copied " + n; },
       copyFailed: "Copy failed",
-      hintDefault: ["wheel=size", "drag=move", "click=open", "r=re-layout", "b=background", "s=select", "+/-=base size", "⌘W=close window", "|", "lightbox: 0=fit", "1=100%", "2=200%", "←/→=prev/next", "m=sound", "Esc=close"],
+      hintDefault: ["wheel=size", "drag=move", "click=open", "r=re-layout", "b=background", "s=select", "+/-=base size", "⌘W=close window", "|", "lightbox: 0=fit", "1=100%", "2=200%", "←/→=prev/next", "space=play/pause", "m=sound", "Esc=close"],
       hintSelect: ["click=select", "⌘A=select all", "⌘C=copy", "s or Esc=exit", "⌘W=close window"],
       emptyTitle: "moodboard — nothing to show",
       emptyBody: "Open this page with the moodboard command. It takes images, videos (mov/webm/mp4) and audio (wav/mp3/m4a/aac/flac/ogg/opus).",
@@ -608,7 +638,7 @@
       copy: function (n) { return "コピー (" + n + ")"; },
       copied: function (n) { return n + " 件コピー"; },
       copyFailed: "コピー失敗",
-      hintDefault: ["wheel=サイズ", "drag=移動", "click=拡大表示", "r=再整列", "b=背景", "s=選択", "+/-=基準サイズ", "⌘W=窓を閉じる", "|", "lightbox: 0=fit", "1=100%", "2=200%", "←/→=前後", "m=音", "Esc=閉じる"],
+      hintDefault: ["wheel=サイズ", "drag=移動", "click=拡大表示", "r=再整列", "b=背景", "s=選択", "+/-=基準サイズ", "⌘W=窓を閉じる", "|", "lightbox: 0=fit", "1=100%", "2=200%", "←/→=前後", "space=再生/停止", "m=音", "Esc=閉じる"],
       hintSelect: ["クリック=選択", "⌘A=全選択", "⌘C=コピー", "s か Esc=抜ける", "⌘W=窓を閉じる"],
       emptyTitle: "moodboard — 表示するアイテムがありません",
       emptyBody: "moodboard コマンド経由で開いてください。画像・動画(mov/webm/mp4)・音声(wav/mp3/m4a/aac/flac/ogg/opus)を渡せます。",
@@ -702,6 +732,7 @@
   var lightboxState = {
     index: 0,
     isVideo: false,
+    videoError: false, // ライトボックスの動画が再生不可(操作バーを出さない)
     soundOn: true,   // ライトボックスの動画は既定で音あり(m で切替)。ライトテーブルは常にミュート
     zoom: 1,
     posX: 0,
@@ -738,6 +769,7 @@
   var lightboxErrorEl = document.getElementById("lightbox-error");
   var lightboxInfoEl = document.getElementById("lightbox-info");
   var lightboxSoundToggleBtn = document.getElementById("lightbox-sound-toggle");
+  var lightboxControlsEl = document.getElementById("lightbox-controls");
   var lightboxCloseBtn = document.getElementById("lightbox-close");
 
   // ---------------- base size ----------------
@@ -896,6 +928,102 @@
     } else {
       item.media.pause();
     }
+  }
+
+  // 再生/一時停止ボタン・シークバー・経過/総時間の操作 UI を root(.player-controls)に組み立て、
+  // media(<audio>/<video>)に結びつける。音声カードとライトボックスの動画で共用する。
+  // 再生中は root に .playing を付ける(再生ボタンが緑になる)。
+  // opts.onToggle(): 再生/一時停止ボタンが押されたとき
+  // opts.isInactive(): true の間はボタン・シークバーの操作を自分で処理せず、伝播も止めない
+  //   (音声カードの選択モード用。クリックが item.el まで bubble して選択トグルになる)
+  function createPlayerControls(media, root, opts) {
+    var playBtn = document.createElement("button");
+    playBtn.type = "button";
+    playBtn.className = "player-playpause";
+    playBtn.textContent = "▶";
+    playBtn.title = S.playPause;
+
+    var seek = document.createElement("input");
+    seek.type = "range";
+    seek.className = "player-seek";
+    seek.min = "0";
+    seek.max = "1000";
+    seek.value = "0";
+    seek.disabled = true; // duration が分かるまでは動かせない
+    seek.title = S.seek;
+
+    var timeEl = document.createElement("span");
+    timeEl.className = "player-time";
+    timeEl.textContent = "0:00 / 0:00";
+
+    var row = document.createElement("div");
+    row.className = "player-row";
+    row.appendChild(playBtn);
+    row.appendChild(seek);
+    root.appendChild(row);
+    root.appendChild(timeEl);
+
+    var seeking = false; // シークバーをドラッグ中か(timeupdate と競合させない)
+
+    function isInactive() {
+      return opts.isInactive ? opts.isInactive() : false;
+    }
+
+    function refresh() {
+      var duration = isFinite(media.duration) ? media.duration : 0;
+      if (duration > 0) {
+        seek.disabled = false;
+        if (!seeking) seek.value = String(Math.round((media.currentTime / duration) * 1000));
+      } else {
+        // src を外した直後(ライトボックスで次の動画へ送ったとき等)は前の位置を残さない
+        seek.disabled = true;
+        seek.value = "0";
+      }
+      timeEl.textContent = formatAudioTime(media.currentTime) + " / " + formatAudioTime(duration);
+    }
+
+    function syncPlayState() {
+      playBtn.textContent = media.paused ? "▶" : "❚❚";
+      root.classList.toggle("playing", !media.paused);
+    }
+
+    // ボタン・シークバーの操作は、通常時は親(カードの drag 開始・クリック再生トグル)へ伝播させず
+    // 自分で再生/シークを行う
+    playBtn.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+    playBtn.addEventListener("click", function (e) {
+      if (isInactive()) return;
+      e.stopPropagation();
+      opts.onToggle();
+    });
+
+    seek.addEventListener("mousedown", function (e) {
+      if (isInactive()) return;
+      e.stopPropagation();
+      seeking = true;
+    });
+    seek.addEventListener("click", function (e) {
+      if (isInactive()) return;
+      e.stopPropagation();
+    });
+    seek.addEventListener("input", function () {
+      if (isInactive()) return; // 選択モード中はシークしない(トグルは click の bubble に任せる)
+      var duration = isFinite(media.duration) ? media.duration : 0;
+      if (duration <= 0) return;
+      media.currentTime = (Number(seek.value) / 1000) * duration;
+      timeEl.textContent = formatAudioTime(media.currentTime) + " / " + formatAudioTime(duration);
+    });
+    // シークし終えたらフォーカスを外す。INPUT にフォーカスが残るとキー操作(Esc・←/→・m 等)が
+    // onKeyDown で無視されたままになる
+    seek.addEventListener("change", function () { seek.blur(); });
+    document.addEventListener("mouseup", function () { seeking = false; });
+
+    media.addEventListener("play", syncPlayState);
+    media.addEventListener("pause", syncPlayState);
+    media.addEventListener("ended", syncPlayState);
+    media.addEventListener("emptied", function () { syncPlayState(); refresh(); });
+    media.addEventListener("timeupdate", refresh);
+    media.addEventListener("durationchange", refresh);
+    media.addEventListener("loadedmetadata", refresh);
   }
 
   function itemHeight(item) {
@@ -1132,91 +1260,22 @@
   // 音声カードを組み立てる: 再生/一時停止ボタン・シークバー・経過/総時間を持つプレイヤー
   function buildAudioCard(item, el, path, label, onSettled) {
     var box = document.createElement("div");
-    box.className = "audio-player";
+    box.className = "audio-player player-controls";
 
     var audio = document.createElement("audio");
     audio.preload = "metadata";
     audio.addEventListener("dragstart", function (e) { e.preventDefault(); });
 
-    var playBtn = document.createElement("button");
-    playBtn.type = "button";
-    playBtn.className = "audio-playpause";
-    playBtn.textContent = "▶";
-    playBtn.title = S.playPause;
-
-    var seek = document.createElement("input");
-    seek.type = "range";
-    seek.className = "audio-seek";
-    seek.min = "0";
-    seek.max = "1000";
-    seek.value = "0";
-    seek.disabled = true; // duration が分かるまでは動かせない
-    seek.title = S.seek;
-
-    var timeEl = document.createElement("span");
-    timeEl.className = "audio-time";
-    timeEl.textContent = "0:00 / 0:00";
-
-    var row = document.createElement("div");
-    row.className = "audio-row";
-    row.appendChild(playBtn);
-    row.appendChild(seek);
-    box.appendChild(row);
-    box.appendChild(timeEl);
     box.appendChild(audio);
-
     item.media = audio;
     item.audioBox = box;
 
-    var seeking = false; // このカードのシークバーをドラッグ中か(timeupdate と競合させない)
-
-    function refreshSeekUI() {
-      var duration = isFinite(audio.duration) ? audio.duration : 0;
-      if (duration > 0) {
-        seek.disabled = false;
-        if (!seeking) seek.value = String(Math.round((audio.currentTime / duration) * 1000));
-      }
-      timeEl.textContent = formatAudioTime(audio.currentTime) + " / " + formatAudioTime(duration);
-    }
-
-    // ボタン・シークバーの操作は、通常時はカードの drag 開始やクリック再生トグルに伝播させず
-    // 自分で再生/シークを行う。選択モード中はここでは何もせず stopPropagation もしない
-    // (クリックが item.el まで bubble し、通常のカードクリックと同じ分岐(attachItemInteractions
-    // の click ハンドラ)で選択トグルになる。分岐をここに重複させない)
-    playBtn.addEventListener("mousedown", function (e) { e.stopPropagation(); });
-    playBtn.addEventListener("click", function (e) {
-      if (selectMode) return;
-      e.stopPropagation();
-      toggleAudioPlayback(item);
+    createPlayerControls(audio, box, {
+      onToggle: function () { toggleAudioPlayback(item); },
+      isInactive: function () { return selectMode; }
     });
 
-    seek.addEventListener("mousedown", function (e) {
-      if (selectMode) return;
-      e.stopPropagation();
-      seeking = true;
-    });
-    seek.addEventListener("click", function (e) {
-      if (selectMode) return;
-      e.stopPropagation();
-    });
-    seek.addEventListener("input", function () {
-      if (selectMode) return; // 選択モード中はシークしない(トグルは click の bubble に任せる)
-      var duration = isFinite(audio.duration) ? audio.duration : 0;
-      if (duration <= 0) return;
-      audio.currentTime = (Number(seek.value) / 1000) * duration;
-      timeEl.textContent = formatAudioTime(audio.currentTime) + " / " + formatAudioTime(duration);
-    });
-    document.addEventListener("mouseup", function () { seeking = false; });
-
-    // 再生中は枠の色を変えて、離れていても分かるようにする(選択状態の青とは別の緑)
-    audio.addEventListener("play", function () { playBtn.textContent = "❚❚"; box.classList.add("playing"); });
-    audio.addEventListener("pause", function () { playBtn.textContent = "▶"; box.classList.remove("playing"); });
-    audio.addEventListener("ended", function () { box.classList.remove("playing"); });
-    audio.addEventListener("timeupdate", refreshSeekUI);
-    audio.addEventListener("loadedmetadata", function () {
-      refreshSeekUI();
-      onSettled();
-    });
+    audio.addEventListener("loadedmetadata", onSettled);
 
     audio.addEventListener("error", function () {
       failedPaths.push(path);
@@ -1418,6 +1477,8 @@
   // 音の状態は #lightbox-info の文字列に混ぜず、独立した大きめのボタンで表示する
   // (アイコン単体だと 11px では判別しづらいため、アイコン+ラベル+枠色の3つで示す)
   function updateSoundToggleUI() {
+    // 操作バーは再生できる動画のときだけ出す(画像・再生不可の表示では出さない)
+    lightboxControlsEl.style.display = lightboxState.isVideo && !lightboxState.videoError ? "flex" : "none";
     if (!lightboxState.isVideo) {
       lightboxSoundToggleBtn.style.display = "none";
       return;
@@ -1442,12 +1503,31 @@
     updateLightboxInfo();
   }
 
+  function toggleLightboxVideoPlayback() {
+    if (!lightboxState.isVideo || lightboxState.videoError) return;
+    if (lightboxVideo.paused) {
+      if (lightboxState.soundOn) pauseAllAudioExcept(null); // 音あり再生になる瞬間は音声カードを止める
+      var playPromise = lightboxVideo.play();
+      if (playPromise && playPromise.catch) playPromise.catch(function () {});
+    } else {
+      lightboxVideo.pause();
+    }
+  }
+
+  createPlayerControls(lightboxVideo, lightboxControlsEl, { onToggle: toggleLightboxVideoPlayback });
+  // 操作バーの上のホイールで動画が拡大されないようにする(拡大の wheel ハンドラは #lightbox にある)
+  lightboxControlsEl.addEventListener("wheel", function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+  }, { passive: false });
+
   // ---------------- lightbox: open / navigate / close ----------------
   function loadLightboxImage() {
     var item = items[lightboxState.index];
     var path = item.path;
     var isVideo = item.kind === "video";
     lightboxState.isVideo = isVideo;
+    lightboxState.videoError = false;
     lightboxState.naturalW = 0;
     lightboxState.naturalH = 0;
     lightboxErrorEl.style.display = "none";
@@ -1471,6 +1551,8 @@
         setFitZoom();
       };
       lightboxVideo.onerror = function () {
+        lightboxState.videoError = true;
+        updateLightboxInfo();
         lightboxVideo.style.display = "none";
         lightboxErrorEl.textContent = S.cannotPlay(basename(path));
         lightboxErrorEl.style.display = "block";
@@ -1618,6 +1700,11 @@
         case "ArrowRight": navigateLightbox(1); break;
         case "b": cycleBackground(); break;
         case "m": toggleLightboxSound(); break;
+        case " ":
+          // ボタンにフォーカスが残っていると keyup でそのボタンも押されるので、先に外す
+          if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+          toggleLightboxVideoPlayback();
+          break;
         default: return;
       }
       e.preventDefault();
