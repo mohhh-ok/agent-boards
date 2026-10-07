@@ -665,11 +665,6 @@
   // 基準サイズ・ホイールでは幅だけが変わるようにする(高さ比例だと空白の箱になるため)。
   // 実測(padding 8px×2 + ボタン行26px + gap6px + 時間表示行)に基づく値
   var AUDIO_CARD_HEIGHT = 64;
-  // wheel 拡大の上限。画像・動画は物理ピクセル基準の MAX_ZOOM で自然に上限が付くが、音声は
-  // mediaWidth が常に0でその仕組みが効かない。基準サイズスライダーの上限(640px)に揃えて、
-  // 際限なく拡大して画面を覆うのを防ぐ
-  var AUDIO_MAX_WIDTH = 640;
-
   // ---------------- shared helpers ----------------
   function clamp(v, lo, hi) {
     return Math.min(hi, Math.max(lo, v));
@@ -934,8 +929,8 @@
   // media(<audio>/<video>)に結びつける。音声カードとライトボックスの動画で共用する。
   // 再生中は root に .playing を付ける(再生ボタンが緑になる)。
   // opts.onToggle(): 再生/一時停止ボタンが押されたとき
-  // opts.isInactive(): true の間はボタン・シークバーの操作を自分で処理せず、伝播も止めない
-  //   (音声カードの選択モード用。クリックが item.el まで bubble して選択トグルになる)
+  // ボタン・シークバーの操作は選択モード中も再生/シークに使う(伝播を止めるので選択トグルにはならない。
+  // 選択モード中はカードのそれ以外の場所のクリックが選択トグル)
   function createPlayerControls(media, root, opts) {
     var playBtn = document.createElement("button");
     playBtn.type = "button";
@@ -965,10 +960,6 @@
 
     var seeking = false; // シークバーをドラッグ中か(timeupdate と競合させない)
 
-    function isInactive() {
-      return opts.isInactive ? opts.isInactive() : false;
-    }
-
     function refresh() {
       var duration = isFinite(media.duration) ? media.duration : 0;
       if (duration > 0) {
@@ -991,22 +982,18 @@
     // 自分で再生/シークを行う
     playBtn.addEventListener("mousedown", function (e) { e.stopPropagation(); });
     playBtn.addEventListener("click", function (e) {
-      if (isInactive()) return;
       e.stopPropagation();
       opts.onToggle();
     });
 
     seek.addEventListener("mousedown", function (e) {
-      if (isInactive()) return;
       e.stopPropagation();
       seeking = true;
     });
     seek.addEventListener("click", function (e) {
-      if (isInactive()) return;
       e.stopPropagation();
     });
     seek.addEventListener("input", function () {
-      if (isInactive()) return; // 選択モード中はシークしない(トグルは click の bubble に任せる)
       var duration = isFinite(media.duration) ? media.duration : 0;
       if (duration <= 0) return;
       media.currentTime = (Number(seek.value) / 1000) * duration;
@@ -1086,38 +1073,22 @@
 
   function attachItemInteractions(item) {
     item.el.addEventListener("wheel", function (e) {
+      // 音声カードは wheel でリサイズしない(ページのスクロール中にカーソルが乗って思わず伸び縮みするため。
+      // 幅は基準サイズのスライダーで変わる)。preventDefault しないのでページはそのままスクロールする
+      if (item.kind === "audio") return;
       e.preventDefault();
       var cRect = canvasEl.getBoundingClientRect();
       var px = e.clientX - cRect.left;
       var py = e.clientY - cRect.top;
       var factor = Math.exp(-e.deltaY * 0.0015);
-      var maxW;
-      if (item.kind === "audio") {
-        // mediaWidth が常に0(自然な視覚サイズが無い)ため、画像・動画の物理ズーム上限が効かない。
-        // 基準サイズの上限と揃えた固定上限を使う(AUDIO_MAX_WIDTH の定義コメント参照)
-        maxW = AUDIO_MAX_WIDTH;
-      } else {
-        var mw = mediaWidth(item.media);
-        maxW = mw ? mw * MAX_ZOOM / devicePixelRatioSafe() : 4096;
-      }
+      var mw = mediaWidth(item.media);
+      var maxW = mw ? mw * MAX_ZOOM / devicePixelRatioSafe() : 4096;
       var newW = clamp(item.w * factor, MIN_ITEM_WIDTH, maxW);
       var ratio = newW / item.w;
-      // カーソル位置を不動点にリサイズ。音声カードは高さが固定(itemHeight 参照)で縦に伸び縮みしないので、
-      // y に ratio を掛けるとカードだけが上下にずれ、上端の行ではヘッダーの裏へ潜って操作できなくなる
-      var yRatio = item.kind === "audio" ? 1 : ratio;
+      // カーソル位置を不動点にリサイズ
       item.x = px - (px - item.x) * ratio;
-      item.y = py - (py - item.y) * yRatio;
+      item.y = py - (py - item.y) * ratio;
       item.w = newW;
-      if (item.kind === "audio") {
-        // 音声カードだけの補正: canvas の左端(x=0)より左は document 座標としてマイナスになり、
-        // ページは横方向にマイナス側へスクロールできないため、はみ出した部分は二度と見えず
-        // 再生ボタン・シークバー・ラベルごと操作不能になる(画面右にはみ出す分は横スクロールで
-        // 回収できるので左だけが問題)。画像・動画は見て比較するだけで操作 UI を持たないため
-        // 起きても実害が薄く、この節では触らない(既存のカーソル追従ズームの感触を保つ)。
-        // 音声カードは操作 UI そのものなので、カーソル追従で計算した x が 0 を下回るときだけ
-        // 0 に補正する(それ以外の位置では今までどおりカーソル位置を不動点にした拡大縮小のまま)
-        item.x = Math.max(0, item.x);
-      }
       applyItemStyle(item);
       manualLayoutChanged = true; // 手動リサイズ済み: window resize での自動再整列を抑止する
     }, { passive: false });
@@ -1272,8 +1243,7 @@
     item.audioBox = box;
 
     createPlayerControls(audio, box, {
-      onToggle: function () { toggleAudioPlayback(item); },
-      isInactive: function () { return selectMode; }
+      onToggle: function () { toggleAudioPlayback(item); }
     });
 
     audio.addEventListener("loadedmetadata", onSettled);

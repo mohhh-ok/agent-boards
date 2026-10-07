@@ -40,7 +40,7 @@ When you find the one you want, tell the agent — or select cards and copy thei
 
 | Action | What happens |
 | --- | --- |
-| wheel / pinch | Resize the card under the cursor (up = bigger, like Google Maps) |
+| wheel / pinch | Resize the card under the cursor (up = bigger, like Google Maps). Audio cards are not resized; the page scrolls instead |
 | drag | Move a card freely. Cards can overlap, and the one you grab comes to the front |
 | click | Open the card full-size (images and videos) |
 | `r` | Put every card back in its original layout |
@@ -65,7 +65,7 @@ When you resize the window, the cards are re-laid out automatically. Once you ha
 
 #### Copy file paths
 
-Press `s` to enter selection mode. Each card gets a checkbox, and clicking a card toggles it. The "Copy" button, or `⌘C`, copies the absolute paths of the selected files to the clipboard, one per line. `⌘A` selects all and `Esc` leaves selection mode. Paste them into the conversation to tell the agent which files you picked.
+Press `s` to enter selection mode. Each card gets a checkbox, and clicking a card toggles it. On audio cards the play button and seek bar still play and seek, so you can listen while you pick; clicking anywhere else on the card toggles it. The "Copy" button, or `⌘C`, copies the absolute paths of the selected files to the clipboard, one per line. `⌘A` selects all and `Esc` leaves selection mode. Paste them into the conversation to tell the agent which files you picked.
 
 ## Commands (what the agent runs)
 
