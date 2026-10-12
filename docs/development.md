@@ -12,12 +12,13 @@ Notes for changing the window itself. For usage, see the [README](../README.md).
 
 ## How it works
 
-- The launcher writes `{ path }` to `/tmp/textboard-<uid>/boards/<rid>.json` and opens `textboard.html?rid=<rid>&lang=<ja|en>` in a detached window process. The page reads the board with the bound `__textboardLoad(rid)`, which also returns the text and the sidecar. The page then calls `__textboardReady(rid, null)`; the window process writes `acks/<rid>.json`, which the launcher waits for
+- The launcher writes `{ path }` to `/tmp/textboard-<uid>/boards/<rid>.json` and opens `textboard.html?rid=<rid>&lang=<ja|en>` in a detached window process. The page reads the board with the bound `__textboardLoad(rid)`, which also returns the text and the saved comments. The page then calls `__textboardReady(rid, null)`; the window process writes `acks/<rid>.json`, which the launcher waits for
 - Bun's event loop does not run while `webview.run()` owns the thread, so the window process cannot push anything to the page. The page calls `__textboardPoll()` every 500 ms. It returns a pending replace URL (`targets/<name>.request.json`), the new file contents when the file's mtime/size changed since the last read or save, whether a `wait` is running (`targets/<name>.waiters/<pid>`), and the ids still in the outbox
 - Replacing with unsaved edits: the page does not navigate. It calls `__textboardReady(newRid, { refused: "unsaved" })`, and the launcher exits with 3
 - Sending: `__textboardSend(payload)` writes `outbox/<name>/<id>.json` (written to a dot-file first and renamed, so `wait` never reads half a file). `wait` claims the oldest file by renaming it to its own name, prints it and deletes it, so one instruction goes to exactly one `wait`
 - Comment positions: edits inside the window shift ranges by the diff of one `input` event (`anchor.diff` + `anchor.shiftRange`, with the caret to resolve ambiguous repeats). Outside changes and reopening search again by quote + 32 characters of context on each side (`anchor.locate`)
-- The sidecar `<file>.textboard.json` is written to a temporary file and renamed, so a symlink placed at that path is replaced, not followed
+- Comments are stored in `~/.textboard/comments/<sha256 of the absolute path>.json` (`TEXTBOARD_HOME` changes `~/.textboard`, for verification), never next to the document, so the user's repository stays clean. The window process adds `file` (the absolute path) to the JSON. Moving or renaming the document detaches its comments; this is accepted
+- The comments file is written to a temporary file and renamed, so a symlink placed at that path is replaced, not followed
 - Edit menu: macOS delivers `⌘Z` / `⌘C` / `⌘V` etc. through the menu bar, and webview creates no menu, so without `editMenu.ts` those keys do nothing in the editor. Keys the page handles itself (`⌘S`, `⌘W`, `⌘↩`, `⌘⌥M`) must not be added to the menu, or they no longer reach the page
 - Display language: window strings are in `STRINGS` in `textboard.html`, CLI messages in `MESSAGES` in `textboard.ts`. Add to both languages
 

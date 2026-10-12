@@ -36,7 +36,8 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import { installEditMenu } from "./editMenu.ts";
 
 if (process.getuid === undefined) throw new Error("textboard supports POSIX environments only");
@@ -57,7 +58,10 @@ const STALE_FILE_MS = READY_TIMEOUT_MS * 5;
 const TARGET_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
 // これより大きいファイルは文章として扱わない(textarea で編集する前提の大きさ)
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
-export const SIDECAR_SUFFIX = ".textboard.json";
+// コメントの保存先。ユーザーのリポに余計なファイルを作らないよう、文書の隣ではなくここに置く。
+// ファイル名は文書の絶対パスの sha256(中に元の絶対パスも持つ)。文書を移動・改名するとコメントは外れる。
+// TEXTBOARD_HOME で場所を変えられる(検証用)
+const COMMENTS_DIR = join(process.env.TEXTBOARD_HOME || join(homedir(), ".textboard"), "comments");
 
 const scriptPath = fileURLToPath(import.meta.url);
 const htmlPath = resolve(dirname(scriptPath), "textboard.html");
@@ -301,7 +305,7 @@ function runWindow(config: WindowConfig) {
     currentPath = board.path;
     lastStamp = stampOf(board.path);
     const text = readFileSync(board.path, "utf8");
-    const sidecar = sidecarPath(board.path);
+    const sidecar = commentsPath(board.path);
     let comments: unknown = null;
     if (existsSync(sidecar)) {
       try {
@@ -332,16 +336,18 @@ function runWindow(config: WindowConfig) {
     }
   });
 
-  // コメントの sidecar(<ファイル>.textboard.json)。コメントが 0 件なら消す(ファイルを残さない)
+  // コメントの保存(COMMENTS_DIR/<sha256>.json)。コメントが 0 件なら消す(ファイルを残さない)
   webview.bind("__textboardSaveComments", (json: string | null) => {
     if (currentPath === null) return { ok: false, error: "no file" };
     try {
-      const sidecar = sidecarPath(currentPath);
+      const sidecar = commentsPath(currentPath);
       if (json === null) rmSync(sidecar, { force: true });
       else {
+        mkdirSync(COMMENTS_DIR, { recursive: true, mode: 0o700 });
+        json = JSON.stringify({ file: currentPath, ...JSON.parse(json) }, null, 2) + "\n";
         // 置いてある symlink の先を書き換えないよう、一時ファイルに書いて rename で置き換える
         const tmp = `${sidecar}.${process.pid}.tmp`;
-        writeFileSync(tmp, json, { flag: "wx" });
+        writeFileSync(tmp, json, { flag: "wx", mode: 0o600 });
         renameSync(tmp, sidecar);
       }
       return { ok: true };
@@ -625,8 +631,8 @@ function fatal(message: string): never {
   process.exit(1);
 }
 
-export function sidecarPath(path: string) {
-  return path + SIDECAR_SUFFIX;
+export function commentsPath(path: string) {
+  return join(COMMENTS_DIR, createHash("sha256").update(path).digest("hex") + ".json");
 }
 
 function pidPath(target: string) {

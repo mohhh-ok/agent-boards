@@ -41,7 +41,8 @@ Select a passage. A "+ Comment" button appears in the margin; click it or press 
 
 - Editing inside the window moves comments with the text. Editing inside a commented passage keeps the comment on the edited passage
 - When the file changes outside the window (the agent rewrote it), each comment is found again by the text it quoted and the text around it. A comment whose passage is gone is listed under "Comments that lost their place". Select a new passage and use "Attach to selection" to put it back, or delete it
-- Comments are saved next to the file as `<file>.textboard.json`, and the file is deleted when the last comment is deleted. Opening the same file later brings the comments back
+- Comments are saved in `~/.textboard/comments/<sha256 of the file's absolute path>.json` (the JSON also holds the absolute path), so nothing is added to your repository. The comments file is deleted when the last comment is deleted. Opening the same file later brings the comments back
+- Comments are keyed by the file's absolute path: if you move or rename the file, its comments are not found any more
 
 ### Sending an instruction to the AI
 
