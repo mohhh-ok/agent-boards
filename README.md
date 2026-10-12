@@ -91,7 +91,7 @@ Exit codes:
 
 | code | meaning |
 | --- | --- |
-| 0 | Shown. Prints `opened target=<name> pid=<pid> 新規\|差し替え file=<path>` (新規 = new window, 差し替え = replaced) |
+| 0 | Shown. Prints `opened target=<name> pid=<pid> new\|replaced file=<path>` |
 | 1 | Bad arguments, a missing file, or not a text file (larger than 5 MB, or contains NUL) |
 | 2 | Could not confirm the window within 20 s (for a new window, the log path is printed) |
 | 3 | The window has unsaved edits, so it was not switched to the new file |

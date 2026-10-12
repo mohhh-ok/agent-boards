@@ -1,15 +1,15 @@
-// macOS のメニューバーに「編集」メニュー(取り消す・やり直す・カット・コピー・ペースト・すべてを選択)を作る。
+// Builds the Edit menu (Undo, Redo, Cut, Copy, Paste, Select All) in the macOS menu bar.
 //
-// macOS では ⌘Z / ⌘C / ⌘V などはメニューの項目を通って WKWebView に届く。webview(webview-bun が使うライブラリ)は
-// メニューを作らないので、何もしないと本文の編集欄でこれらのショートカットが効かない。項目の action は
-// first responder(フォーカスのある WKWebView)へ流れ、WebKit 標準の取り消し・クリップボード操作になる。
+// On macOS, ⌘Z / ⌘C / ⌘V and the like reach WKWebView through menu items. webview (the library webview-bun uses)
+// creates no menu, so without this these shortcuts do nothing in the editor. Each item's action goes to the
+// first responder (the focused WKWebView) and becomes WebKit's standard undo / clipboard operation.
 //
-// ⌘W・⌘S など textboard.html が自分で扱うキーはメニューに載せない(載せるとページに届かなくなる)。
+// Keys that textboard.html handles itself, such as ⌘W and ⌘S, are not put in the menu (they would no longer reach the page).
 import { dlopen, FFIType, ptr, type Pointer } from "bun:ffi";
 
 const LIBOBJC = "/usr/lib/libobjc.A.dylib";
 
-// objc_msgSend は引数の数ごとに型を決めて呼ぶ必要があるので、引数の数ごとに別に開く
+// objc_msgSend must be called with a signature fixed per argument count, so it is opened once per argument count
 const base = dlopen(LIBOBJC, {
   objc_getClass: { args: [FFIType.ptr], returns: FFIType.ptr },
   sel_registerName: { args: [FFIType.ptr], returns: FFIType.ptr },
@@ -56,14 +56,14 @@ export function installEditMenu(lang: "ja" | "en") {
   const app = base.objc_msgSend(cls("NSApplication"), sel("sharedApplication")) as Pointer;
   const mainMenu = newMenu("");
 
-  // メニューバーの先頭はアプリケーションメニューとして扱われるので、空のものを置いてから「編集」を足す
+  // The first menu in the bar is treated as the application menu, so put an empty one first, then add Edit
   const appItem = addItem(mainMenu, "", null, "");
   send1(appItem, sel("setSubmenu:"), newMenu("textboard"));
 
   const editItem = addItem(mainMenu, t.edit, null, "");
   const edit = newMenu(t.edit);
   addItem(edit, t.undo, "undo:", "z");
-  addItem(edit, t.redo, "redo:", "Z"); // 大文字は ⇧ 付き(⌘⇧Z)
+  addItem(edit, t.redo, "redo:", "Z"); // Uppercase means with ⇧ (⌘⇧Z)
   send1(edit, sel("addItem:"), base.objc_msgSend(cls("NSMenuItem"), sel("separatorItem")));
   addItem(edit, t.cut, "cut:", "x");
   addItem(edit, t.copy, "copy:", "c");

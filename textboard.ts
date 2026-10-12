@@ -1,23 +1,24 @@
 #!/usr/bin/env bun
-// textboard.html を webview-bun のウィンドウで開くランチャー。サーバ・ブラウザ不要。
-// 作りは moodboard(github.com/mohhh-ok/moodboard)のランチャーに揃えている。
+// Launcher that opens textboard.html in a webview-bun window. No server or browser needed.
+// Its structure follows the launcher of moodboard (github.com/mohhh-ok/moodboard).
 //
-// 使い方:
-//   textboard --target <名前> <ファイル>          開く。同名ウィンドウがあれば中身を差し替える
-//   textboard wait --target <名前> [--timeout <秒>]  窓から AI への指示が送られるまで待ち、JSON を stdout に出す
-//   textboard --close <名前>                      その名前のウィンドウだけ閉じる
-//   textboard --list                              開いている名前付きウィンドウを出す
-// どの形も先頭に --lang ja|en を置ける(表示言語。README の「Language」節)
+// Usage:
+//   textboard --target <name> <file>                  Open. If a window with that name exists, switch it to the file
+//   textboard wait --target <name> [--timeout <sec>]  Wait until the window sends an instruction to the AI; print it as JSON on stdout
+//   textboard --close <name>                          Close only the window with that name
+//   textboard --list                                  List the open named windows
+// Every form may start with --lang ja|en (display language; see "Language" in the README)
 //
-// ランチャーはウィンドウ用の子プロセスを別セッション(detached)で起動し、ページがファイルを読み込んだ通知(ack)を
-// 受けてから終了する。終了コード:
-//   0 = 表示済み / 1 = 引数・パスの誤り / 2 = 時間内に表示されなかった / 3 = 窓に未保存の編集があり差し替えなかった
+// The launcher starts the window as a child process in its own session (detached) and exits after the page
+// acknowledges that it loaded the file (ack). Exit codes:
+//   0 = shown / 1 = bad arguments or path / 2 = not shown in time / 3 = the window has unsaved edits, so it was not switched
 //
-// 窓 → エージェントの指示は、ページが bind 関数 __textboardSend で outbox/<名前>/ に JSON を書き、
-// `textboard wait` がそれを受け取って消す。wait が回っていない間に送られた指示も溜まり、次の wait が受け取る。
+// Instructions from the window to the agent: the page writes JSON to outbox/<name>/ through the bound function
+// __textboardSend, and `textboard wait` takes and deletes it. Instructions sent while no wait is running are kept
+// and taken by the next wait.
 //
-// webview.run() の間は Bun のイベントループが回らないため、窓プロセスから能動的にページへは送れない。
-// 差し替え要求・ファイルの外での変更・wait の有無は、ページが __textboardPoll を定期的に呼んで受け取る。
+// Bun's event loop does not run during webview.run(), so the window process cannot push anything to the page.
+// The page calls __textboardPoll periodically to receive replace requests, outside changes to the file and whether a wait is running.
 import { Webview, SizeHint } from "webview-bun";
 import { spawn, spawnSync } from "node:child_process";
 import {
@@ -42,8 +43,8 @@ import { installEditMenu } from "./editMenu.ts";
 
 if (process.getuid === undefined) throw new Error("textboard supports POSIX environments only");
 const USER_ID = process.getuid();
-// TMPDIR はエージェントの実行環境ごとに違うことがあるため、同じユーザーの全プロセスで共有できる固定の場所に置く。
-// /tmp は他ユーザーも書けるので、uid 付きの 0700 ディレクトリにして持ち主を確かめる
+// TMPDIR can differ between agent environments, so use a fixed place shared by every process of the same user.
+// Other users can write to /tmp, so use a 0700 directory named with the uid and check its owner
 const STATE_DIR = `/tmp/textboard-${USER_ID}`;
 const TARGETS_DIR = join(STATE_DIR, "targets");
 const ACKS_DIR = join(STATE_DIR, "acks");
@@ -56,11 +57,11 @@ const WAIT_POLL_MS = 300;
 const LOCK_WAIT_MS = READY_TIMEOUT_MS + 5_000;
 const STALE_FILE_MS = READY_TIMEOUT_MS * 5;
 const TARGET_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
-// これより大きいファイルは文章として扱わない(textarea で編集する前提の大きさ)
+// Larger files are not treated as text (the size assumes editing in a textarea)
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
-// コメントの保存先。ユーザーのリポに余計なファイルを作らないよう、文書の隣ではなくここに置く。
-// ファイル名は文書の絶対パスの sha256(中に元の絶対パスも持つ)。文書を移動・改名するとコメントは外れる。
-// TEXTBOARD_HOME で場所を変えられる(検証用)
+// Where comments are stored. Kept here rather than next to the document, so no extra files appear in the user's repository.
+// The file name is the sha256 of the document's absolute path (the JSON also holds the path). Moving or renaming the
+// document detaches its comments. TEXTBOARD_HOME changes the location (for verification)
 const COMMENTS_DIR = join(process.env.TEXTBOARD_HOME || join(homedir(), ".textboard"), "comments");
 
 const scriptPath = fileURLToPath(import.meta.url);
@@ -68,12 +69,13 @@ const htmlPath = resolve(dirname(scriptPath), "textboard.html");
 
 type WindowConfig = { target: string; url: string; requestId: string; lang: Lang };
 type Ack = { pid: number; refused?: "unsaved" };
-// ページへ渡す 1 回分の表示内容。boards/<rid>.json に書き、ページが __textboardLoad(rid) で読む
+// What to show for one request. Written to boards/<rid>.json; the page reads it with __textboardLoad(rid)
 type Board = { path: string };
 
-// ---------------- 表示言語 ----------------
-// 決め方は moodboard と同じ: --lang > TEXTBOARD_LANG > macOS の言語設定。ja 以外は en。$LANG は見ない。
-// 成功時の `opened ...` 行と wait の JSON はスクリプト向けなので訳さない
+// ---------------- Display language ----------------
+// Chosen the same way as moodboard: --lang > TEXTBOARD_LANG > the macOS language setting. Anything but ja is en.
+// $LANG is not used (agents and terminals often set en_US.UTF-8 even when macOS is in Japanese).
+// The `opened ...` line on success and the JSON from wait are for scripts, so they are not translated
 type Lang = "ja" | "en";
 const MESSAGES = {
   ja: {
@@ -132,7 +134,7 @@ function parseLang(value: string | undefined, source: string): Lang {
   usageError(M.badLang(source, value ?? ""));
 }
 
-// `defaults read -g AppleLanguages` の出力は `(\n    "ja-JP",\n    en\n)` の形。先頭が優先言語
+// `defaults read -g AppleLanguages` prints `(\n    "ja-JP",\n    en\n)`. The first one is the preferred language
 function systemLang(): Lang {
   const result = spawnSync("defaults", ["read", "-g", "AppleLanguages"], { encoding: "utf8" });
   const first = result.status === 0 ? /\(\s*"?([^",\s)]+)/.exec(result.stdout)?.[1] : undefined;
@@ -173,7 +175,7 @@ async function main(argv: string[]) {
   process.exit(await openFile(target, path));
 }
 
-// ---------------- 開くファイルの確認 ----------------
+// ---------------- Checking the file to open ----------------
 
 function checkedTextFile(arg: string): string {
   const path = resolve(arg);
@@ -181,7 +183,7 @@ function checkedTextFile(arg: string): string {
   const stat = statSync(path);
   if (!stat.isFile()) fatal(M.notFile(path));
   if (stat.size > MAX_FILE_BYTES) fatal(M.tooLarge(path));
-  // 先頭 8KB に NUL があればバイナリとみなす(git と同じ判定)
+  // Treat it as binary if the first 8 KB contain NUL (the same test as git)
   const fd = openSync(path, "r");
   const head = Buffer.alloc(Math.min(8192, stat.size));
   readSync(fd, head, 0, head.length, 0);
@@ -190,10 +192,10 @@ function checkedTextFile(arg: string): string {
   return path;
 }
 
-// ---------------- ウィンドウの表示 ----------------
+// ---------------- Showing the window ----------------
 
 async function openFile(target: string, path: string): Promise<number> {
-  // 同じ名前への起動が重なると、両方が「未オープン」と判断して窓が 2 つ開く。名前ごとのロックで直列にする
+  // If two launches for the same name overlap, both decide "not open" and two windows open. Serialize with a per-name lock
   const lock = await acquireTargetLock(target);
   if (!lock) {
     console.error(M.lockFailed(target, lockPath(target)));
@@ -215,7 +217,7 @@ async function showFile(target: string, path: string): Promise<number> {
   let child: ReturnType<typeof spawn> | null = null;
   let logPath: string | null = null;
   if (existingPid !== null) {
-    // 宛先 pid を入れておき、同名で後から開いた窓が古い要求を拾わないようにする
+    // Include the destination pid so that a window opened later under the same name does not pick up an old request
     writeFileSync(requestPath(target), JSON.stringify({ requestId, url, pid: existingPid }));
   } else {
     logPath = join(LOGS_DIR, `${requestId}.log`);
@@ -229,10 +231,10 @@ async function showFile(target: string, path: string): Promise<number> {
   }
 
   const ack = await waitForAck(requestId, child);
-  const action = existingPid !== null ? "差し替え" : "新規";
+  const action = existingPid !== null ? "replaced" : "new";
   if (ack === null) {
-    // 差し替え要求がまだ受け取られていなければ、要求と board を消す(誰にも読まれない)。受け取り済みなら
-    // 窓が読み込み中の可能性があるので消さず、窓の __textboardLoad と次回の sweepStaleFiles に任せる(moodboard と同じ)
+    // If the replace request has not been taken yet, delete it and the board (nobody will read them). If it was taken,
+    // the window may be loading it, so leave them to the window's __textboardLoad and the next sweepStaleFiles (as in moodboard)
     if (existingPid === null || existsSync(requestPath(target))) {
       rmSync(requestPath(target), { force: true });
       rmSync(boardPath(requestId), { force: true });
@@ -263,7 +265,7 @@ async function waitForAck(requestId: string, child: ReturnType<typeof spawn> | n
   return null;
 }
 
-// ---------------- 窓プロセス ----------------
+// ---------------- Window process ----------------
 
 type DiskStamp = { mtimeMs: number; size: number } | null;
 
@@ -285,7 +287,7 @@ function runWindow(config: WindowConfig) {
   rmSync(requestPath(config.target), { force: true });
   mkdirSync(outboxDir(config.target), { recursive: true, mode: 0o700 });
 
-  // 今開いているファイルと、最後に読んだ/書いたときのディスク上の状態。外での書き換えの検出に使う
+  // The open file and its state on disk when last read or written. Used to detect outside changes
   let currentPath: string | null = null;
   let lastStamp: DiskStamp = null;
 
@@ -293,11 +295,11 @@ function runWindow(config: WindowConfig) {
   webview.title = `textboard — ${config.target}`;
   webview.size = { width: 1180, height: 860, hint: SizeHint.NONE };
   installEditMenu(config.lang);
-  // 検証用: 実機の窓でページの操作を再現するスクリプトを差し込む(docs/development.md)。通常の起動では使わない
+  // For verification: inject a script that drives the page in the real window (docs/development.md). Not used normally
   const devInit = process.env.TEXTBOARD_DEV_INIT_SCRIPT;
   if (devInit) webview.init(readFileSync(devInit, "utf8"));
 
-  // run() 中は Bun のイベントループが止まるため、callback は同期 I/O だけで書く
+  // Bun's event loop is stopped during run(), so callbacks use synchronous I/O only
   webview.bind("__textboardLoad", (rid: string) => {
     const path = boardPath(rid);
     const board = JSON.parse(readFileSync(path, "utf8")) as Board;
@@ -321,7 +323,7 @@ function runWindow(config: WindowConfig) {
   webview.bind("__textboardReady", (rid: string, result: { refused?: "unsaved" } | null) => {
     const ack: Ack = { pid: process.pid, ...(result?.refused ? { refused: result.refused } : {}) };
     writeFileSync(ackPath(rid), JSON.stringify(ack));
-    // 差し替えを断った場合、読まれなかった board を消す
+    // When the switch was refused, delete the board that was not read
     if (result?.refused) rmSync(boardPath(rid), { force: true });
   });
 
@@ -336,7 +338,7 @@ function runWindow(config: WindowConfig) {
     }
   });
 
-  // コメントの保存(COMMENTS_DIR/<sha256>.json)。コメントが 0 件なら消す(ファイルを残さない)
+  // Save the comments (COMMENTS_DIR/<sha256>.json). With zero comments, delete the file (leave nothing behind)
   webview.bind("__textboardSaveComments", (json: string | null) => {
     if (currentPath === null) return { ok: false, error: "no file" };
     try {
@@ -345,7 +347,7 @@ function runWindow(config: WindowConfig) {
       else {
         mkdirSync(COMMENTS_DIR, { recursive: true, mode: 0o700 });
         json = JSON.stringify({ file: currentPath, ...JSON.parse(json) }, null, 2) + "\n";
-        // 置いてある symlink の先を書き換えないよう、一時ファイルに書いて rename で置き換える
+        // Write a temporary file and rename it over, so a symlink placed there is replaced rather than followed
         const tmp = `${sidecar}.${process.pid}.tmp`;
         writeFileSync(tmp, json, { flag: "wx", mode: 0o600 });
         renameSync(tmp, sidecar);
@@ -359,14 +361,14 @@ function runWindow(config: WindowConfig) {
   webview.bind("__textboardSend", (payload: Record<string, unknown>) => {
     const id = `${Date.now()}-${randomUUID().slice(0, 8)}`;
     const full = { id, target: config.target, ...payload };
-    // 書きかけを wait に読ませないよう、別名で書いてから rename する
+    // Write under another name and rename, so wait never reads a half-written file
     const tmp = join(outboxDir(config.target), `.${id}.tmp`);
     writeFileSync(tmp, JSON.stringify(full, null, 2) + "\n");
     renameSync(tmp, join(outboxDir(config.target), `${id}.json`));
     return { id };
   });
 
-  // ページが 500ms ごとに呼ぶ。差し替え要求・ファイルの外での変更・wait の有無・未受領の指示の数を返す
+  // Called by the page every 500 ms. Returns a replace request, outside changes to the file, whether a wait is running, and the instructions not yet taken
   webview.bind("__textboardPoll", () => {
     let replaceUrl: string | null = null;
     const request = requestPath(config.target);
@@ -391,7 +393,7 @@ function runWindow(config: WindowConfig) {
     return { ok: result.status === 0 };
   });
 
-  // ⌘W。webview-bun は run() を外から止める口を公開していないため、後片付けをしてからプロセスごと終える
+  // ⌘W. webview-bun exposes no way to stop run() from outside, so clean up and exit the whole process
   webview.bind("__textboardClose", () => {
     cleanupWindow(config);
     process.exit(0);
@@ -422,7 +424,7 @@ async function waitForInstruction(args: string[]): Promise<number> {
   }
   if (target === null) usageError(M.badTargetName);
 
-  // 窓が開いていなくても、溜まっている指示があれば先に渡す
+  // Hand over a queued instruction first, even if the window is not open
   const queued = takeInstruction(target);
   if (queued !== null) {
     process.stdout.write(queued);
@@ -433,7 +435,7 @@ async function waitForInstruction(args: string[]): Promise<number> {
     return 1;
   }
 
-  // 窓に「AI が待っている」と出すための印。同じ名前の wait が複数あっても、どれか 1 つが生きていれば待っている扱い
+  // A marker so the window can show that the AI is waiting. With several waits for the same name, any live one counts
   const marker = join(waitersDir(target), String(process.pid));
   mkdirSync(waitersDir(target), { recursive: true, mode: 0o700 });
   writeFileSync(marker, "");
@@ -483,8 +485,8 @@ function takeInstructionPeek(target: string): number {
   return pendingIds(target).length;
 }
 
-// いちばん古い指示を 1 つ取り出す。複数の wait が同時に取りに来ても 1 つの指示は 1 つの wait にだけ渡るよう、
-// rename で自分のものにしてから読む
+// Take the oldest instruction. Claim it by rename before reading, so that even when several waits take at once,
+// each instruction goes to exactly one wait
 function takeInstruction(target: string): string | null {
   for (const id of pendingIds(target)) {
     const from = join(outboxDir(target), `${id}.json`);
@@ -545,7 +547,7 @@ function listTargets() {
   }
 }
 
-// pid ファイルが指すプロセスが今も textboard のその名前の窓かを確かめる。古い pid ファイルは消す
+// Check that the process in the pid file is still textboard's window for that name. Delete stale pid files
 function findWindowPid(target: string): number | null {
   const pid = readPid(target);
   if (pid === null) return null;
@@ -557,9 +559,9 @@ function findWindowPid(target: string): number | null {
   return null;
 }
 
-// ---------------- 状態ディレクトリ ----------------
+// ---------------- State directory ----------------
 
-// 他ユーザーが先に作ったディレクトリや symlink を使うと、要求ファイルの差し込みや書き込み先のすり替えができてしまう
+// Using a directory or symlink created first by another user would let them plant request files or redirect writes
 function ensureStateDir() {
   try {
     mkdirSync(STATE_DIR, { mode: 0o700 });
@@ -591,7 +593,7 @@ async function acquireTargetLock(target: string): Promise<boolean> {
   return false;
 }
 
-// boards/ と acks/ に、誰にも読まれないまま残った古いファイルを掃除する(outbox は wait が受け取るまで残す)
+// Clean up old files left unread in boards/ and acks/ (the outbox is kept until a wait takes it)
 function sweepStaleFiles(): void {
   const deadline = Date.now() - STALE_FILE_MS;
   for (const dir of [BOARDS_DIR, ACKS_DIR]) {

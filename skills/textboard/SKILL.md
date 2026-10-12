@@ -1,79 +1,79 @@
 ---
 name: textboard
-description: 文章(Markdown・プレーンテキスト)をユーザーと一緒に直すための窓。ユーザーが本文を直接直し、好きな範囲にコメントを付け、窓から AI(呼び出し元のエージェント)へ指示を送る。README・記事・仕様書・文面などを書いて「見せて」「一緒に直したい」「textboard で開いて」「コメントを付けたい」と言われたときに使う。moodboard の文章版。
+description: A window for revising text (Markdown or plain text) together with the user. The user edits the text directly, comments on any passage, and sends instructions from the window to the AI (the calling agent). Use it after writing a README, article, spec or message when the user says "show me", "let's revise this together", "open it in textboard" or "I want to comment on it". The text counterpart of moodboard.
 ---
 
-# textboard — 文章をユーザーと一緒に直す窓
+# textboard — a window for revising text with the user
 
-`textboard` コマンド(bun + webview-bun の WKWebView 窓)で開く。**サーバもブラウザも不要**。AI は内蔵していない。窓から届いた指示を受けて文章を直すのは、呼び出し元のエージェント(あなた)。
+Open it with the `textboard` command (a WKWebView window via bun + webview-bun). **No server or browser needed.** No AI is built in: the calling agent (you) rewrites the text based on the instructions that come from the window.
 
-## 流れ
+## Flow
 
-1. ファイルを書く(または既存のファイルを選ぶ)
-2. `textboard --target <名前> <ファイル>` で開く
-3. `textboard wait --target <名前>` を **background** で回す
-4. ユーザーが窓で本文を直し、コメントを付け、指示を送ると、wait が JSON を出して rc=0 で終わる
-5. JSON の `file` を読み直し(ユーザーの編集が保存済み)、`instruction` と `comments` に沿ってファイルを書き換える。窓は自動で読み直す
-6. 直したら、また 3 から(wait を回し直す)。直した内容は会話でも短く報告する
+1. Write the file (or pick an existing one)
+2. Open it with `textboard --target <name> <file>`
+3. Run `textboard wait --target <name>` **in the background**
+4. When the user edits the text, adds comments and sends an instruction in the window, wait prints JSON and exits with rc=0
+5. Read `file` from the JSON again (the user's edits are saved), then rewrite the file following `instruction` and `comments`. The window reloads it automatically
+6. After rewriting, go back to 3 (run wait again). Briefly report what you changed in the conversation too
 
-## 開き方
+## Opening
 
 ```sh
 command -v textboard >/dev/null || bun install -g github:mohhh-ok/textboard
-textboard --target <名前> <ファイル>; echo "rc=$?"
+textboard --target <name> <file>; echo "rc=$?"
 ```
 
-- 前面でそのまま実行する。`nohup`・`&`・`disown` は付けない。窓は textboard 自身が別セッションの子プロセスで開くので、ツール呼び出しが終わっても残る。ランチャーは表示を確認して数秒で終わる
-- `--target` は必須。同じ名前の窓が開いていればそのファイルに差し替え(位置はそのまま)、無ければ新しく開く。名前は作業ディレクトリ名(プロジェクト名)で始め、英数字と `. _ -` だけにする(例: `billionclips-readme`)
-- 開けるのはテキストファイル 1 つ(5MB まで、NUL を含まないもの)
+- Run it in the foreground as is. Do not add `nohup`, `&` or `disown`. textboard opens the window in a child process in its own session, so it stays after the tool call ends. The launcher exits within seconds once it confirms the window is showing
+- `--target` is required. If a window with that name is open, it switches to the file (staying where it is); otherwise a new one opens. Start the name with the working directory name (project name) and use only letters, digits and `. _ -` (e.g. `billionclips-readme`)
+- It opens one text file (up to 5 MB, without NUL)
 
-### 「開いた」と報告してよい条件
+### When you may report "opened"
 
-終了コードが 0 で、`opened target=<名前> pid=<PID> 新規|差し替え file=<パス>` が出たときだけ。この行はページがファイルを読み込んだ通知を受けてから出る。
+Only when the exit code is 0 and `opened target=<name> pid=<PID> new|replaced file=<path>` is printed. This line is printed after the page acknowledges that it loaded the file.
 
-- `1` = 引数の誤り、存在しないファイル、テキストでないファイル
-- `2` = 20 秒以内に表示を確認できなかった(新規なら log のパスが出る)
-- `3` = 窓に未保存の編集があり、差し替えなかった。ユーザーに「保存するか破棄してください」と頼んでから開き直す。勝手に `--close` して開き直さない(編集が消える)
+- `1` = bad arguments, missing file, or not a text file
+- `2` = the window could not be confirmed within 20 seconds (for a new window, the log path is printed)
+- `3` = the window has unsaved edits, so it was not switched. Ask the user to "save or discard your edits", then open again. Do not `--close` and reopen on your own (the edits would be lost)
 
-## 指示の受け取り方(wait)
+## Receiving instructions (wait)
 
 ```sh
-textboard wait --target <名前>; echo "rc=$?"
+textboard wait --target <name>; echo "rc=$?"
 ```
 
-- **必ず background で実行する**(ユーザーが送るまで終わらない)。終わったら出力を読む
-- wait が回っていない間に送られた指示も溜まっていて、次の wait がいちばん古いものから 1 件ずつ受け取る。受け取ったら、溜まっている分が無いかを確かめるためにも wait を回し直す
-- 窓の下の欄に「AI が指示を待っています」と出るのは wait が回っている間だけ。回していないと、ユーザーには「AI は今、受け取り待ちをしていません」と見える。ファイルを開いたら、すぐ wait を回す
+- **Always run it in the background** (it does not finish until the user sends). Read the output when it finishes
+- Instructions sent while wait is not running are kept, and the next wait takes them one at a time, oldest first. After receiving one, run wait again, also to check whether more are queued
+- The window shows "The AI is waiting for an instruction" only while wait is running. Otherwise the user sees "The AI is not listening right now". Run wait as soon as you open the file
 
-終了コード:
+Exit codes:
 
-- `0` = 受け取った。stdout に JSON
-- `1` = 引数の誤り、またはその名前の窓が開いていない(溜まっている指示も無い)
-- `2` = `--timeout <秒>` を付けたときに時間切れ
-- `3` = 待っている間に窓が閉じられた。ユーザーが作業を終えたとみなし、wait を回し直さない
+- `0` = received. JSON on stdout
+- `1` = bad arguments, or no window with that name is open (and nothing is queued)
+- `2` = timed out when `--timeout <seconds>` was given
+- `3` = the window was closed while waiting. Treat it as the user being done, and do not run wait again
 
-### JSON の形
+### JSON shape
 
 ```json
 {
   "id": "1791764935089-9b15d890",
   "target": "billionclips-readme",
   "file": "/Users/me/project/README.md",
-  "instruction": "コメントに沿って直してください。全体をもう少し短く。",
+  "instruction": "Address my comments. Make it a bit shorter overall.",
   "comments": [
     {
       "id": "cmv4ikrhntddz",
       "line": 7,
       "endLine": 7,
-      "quote": "右の余白にコメントが並びます",
-      "comment": "「余白」より「右側」のほうが伝わりやすいかも"
+      "quote": "Comments are listed in the margin",
+      "comment": "\"on the right\" might be clearer than \"in the margin\""
     },
     {
       "id": "cmv4ikrhr4cgn",
       "line": null,
       "endLine": null,
-      "quote": "最後の段落です。",
-      "comment": "締めとして弱い",
+      "quote": "This is the last paragraph.",
+      "comment": "Weak as an ending",
       "lost": true
     }
   ],
@@ -82,35 +82,35 @@ textboard wait --target <名前>; echo "rc=$?"
 }
 ```
 
-- `file`: 絶対パス。ユーザーの編集は送る前に保存されている。**直す前に必ず読み直す**(`savedBeforeSend: true` なら、あなたが前に読んだ後にユーザーが書き換えている)
-- `instruction`: 指示の文。空のこともある(そのときはコメントへの対応を頼まれている)
-- `comments`: その時点の全コメント(行順)。`line`・`endLine` はディスク上のファイルの行番号(1 始まり)。`quote` はユーザーが選んだ範囲の文字列。`lost: true` は本文が変わって場所が分からなくなったコメント(`line` は null。`quote` は元の文)
-- コメントの扱い: コメントは窓に残り続け、消すのはユーザー。あなたはコメントの保存ファイル(`~/.textboard/comments/<絶対パスの sha256>.json`)を書き換えない(窓が上書きする)。どのコメントにどう対応したかは会話で報告する
-- コメントはファイルの絶対パスに紐づく。ファイルを移動・改名するとコメントは外れる(窓で開き直しても出ない)。コメントが付いた文書を移動・改名するときは、先にユーザーに伝える
+- `file`: absolute path. The user's edits are saved before sending. **Always read it again before rewriting** (with `savedBeforeSend: true`, the user changed it after you last read it)
+- `instruction`: the instruction text. It may be empty (then you are asked to address the comments)
+- `comments`: every comment at that moment (in line order). `line` and `endLine` are line numbers in the file on disk (1-based). `quote` is the text the user selected. `lost: true` marks a comment whose place was lost because the text changed (`line` is null; `quote` is the original text)
+- Handling comments: comments stay in the window, and only the user deletes them. Do not edit the comments file (`~/.textboard/comments/<sha256 of the absolute path>.json`); the window overwrites it. Report in the conversation how you addressed each comment
+- Comments are tied to the file's absolute path. Moving or renaming the file detaches them (they do not appear even if you reopen it). Tell the user before moving or renaming a document that has comments
 
-## 書き換えるとき
+## When rewriting
 
-- ファイルを書き換えると、窓が自動で読み直す(ユーザーに未保存の編集が無いとき)。ユーザーに未保存の編集があると窓は読み直さず、「外の版を読み込む / 自分の版で上書き保存」をユーザーに選ばせる。上書きされることがあるので、書き換えた後は wait の次の JSON で `file` を読み直す
-- コメントは引用した文字列と前後の文脈で付け直される。引用した文そのものを書き換えた場合も、前後が残っていれば付いたまま。段落ごと消すと「場所が分からなくなったコメント」になる
+- When you rewrite the file, the window reloads it automatically (if the user has no unsaved edits). If the user has unsaved edits, the window does not reload and lets the user choose "Load the outside version / Overwrite with my version". Your change may be overwritten, so read `file` again from the next wait's JSON
+- Comments are reattached by their quoted text and the surrounding context. Even if you rewrite the quoted passage itself, the comment stays as long as the text around it remains. Deleting a whole paragraph makes its comments ones that "lost their place"
 
-## 閉じる・一覧
+## Closing and listing
 
 ```sh
-textboard --close <名前>   # その名前の窓だけ閉じる(未保存の編集は消える。ユーザーに頼まれたときだけ)
-textboard --list           # 開いている名前付きの窓
+textboard --close <name>   # close only that window (unsaved edits are lost; only when the user asks)
+textboard --list           # open named windows
 ```
 
-## 絶対にやらないこと
+## Never do this
 
-- **`pkill -f textboard` 等で全体を閉じない**。別のプロジェクトの窓まで閉じる
-- 他のプロジェクトの名前を `--target` に使わない
-- **`open "file://...?クエリ"` で textboard.html を開かない**(クエリが落ちて空になる)。Playwright MCP でも開かない
-- wait を前面で実行しない(ユーザーが送るまで会話が止まる)
+- **Do not close everything with `pkill -f textboard` or the like.** It closes other projects' windows too
+- Do not use another project's name for `--target`
+- **Do not open textboard.html with `open "file://...?query"`** (the query is dropped and the window is empty). Do not open it with the Playwright MCP either
+- Do not run wait in the foreground (the conversation stops until the user sends)
 
-## 備考
+## Notes
 
-- 窓の操作(ユーザー向け): `⌘S` 保存 / 範囲を選んで `⌘⌥M` か「＋ コメント」でコメント(`Enter` で確定) / コメントの文はクリックしてそのまま直せる(`Enter` で確定、`Esc` で取り消し) / 下の欄で `Enter` で送る(`Shift+Enter` で改行。日本語入力の確定の Enter では送らない) / 「コピー」で指示とコメントをクリップボードへ(wait が回っていないときに会話へ貼る用) / `⌘W` 閉じる(未保存なら 2 回)
-- 状態ファイルは `/tmp/textboard-<uid>/`(権限 700)。targets に名前ごとの pid、outbox に受け取られていない指示、logs に新規起動のログ
-- コメントは `~/.textboard/comments/` に保存され、文書の隣(リポの中)には何も作らない
-- 画面と CLI のメッセージは macOS の言語設定に合わせて日本語か英語。`opened ...` 行と wait の JSON は言語によらない
-- 窓本体の変更・検証手順は [docs/development.md](https://github.com/mohhh-ok/textboard/blob/main/docs/development.md)
+- Window controls (for the user): `⌘S` save / select a passage and press `⌘⌥M` or "+ Comment" to comment (`Enter` to confirm) / click a comment's text to edit it in place (`Enter` to confirm, `Esc` to undo) / `Enter` in the bottom box sends (`Shift+Enter` for a new line; the `Enter` that confirms IME input does not send) / "Copy" puts the instruction and comments on the clipboard (for pasting into the conversation when wait is not running) / `⌘W` closes (twice with unsaved edits)
+- State files are in `/tmp/textboard-<uid>/` (mode 700): per-name pids in targets, instructions not yet taken in outbox, logs of new windows in logs
+- Comments are saved in `~/.textboard/comments/`; nothing is created next to the document (in the repository)
+- The window and CLI messages are in Japanese or English, following the macOS language setting (`--lang ja|en` or `TEXTBOARD_LANG` to choose). The `opened ...` line and the JSON from wait are the same in every language
+- How to change and verify the window itself: [docs/development.md](https://github.com/mohhh-ok/textboard/blob/main/docs/development.md)

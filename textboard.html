@@ -1,12 +1,13 @@
 <!DOCTYPE html>
 <!--
-  textboard.html — テキストファイル(主に Markdown・プレーンテキスト)を、ユーザーが直接直し、好きな範囲にコメントを付け、
-  AI(呼び出し元のエージェント)へ指示を送るための窓。ビルド不要・外部依存なし(同じディレクトリの anchor.js だけ読む)。
+  textboard.html — a window where the user edits a text file (mostly Markdown or plain text) directly, comments on any
+  passage, and sends instructions to the AI (the calling agent). No build step and no external dependencies
+  (it only loads anchor.js from the same directory).
 
-  - 本文は textarea で原文のまま編集する。背後に同じ文字組みの #mirror を置き、コメントの範囲をそこでハイライトする
-  - ファイルの読み書き・指示の送り出しは textboard.ts が webview.bind で注入する __textboard* 関数で行う
-  - 起動手順の正は README.md(textboard.ts の webview-bun 窓で開く)
-  - http で開いて検証するときは、検証スクリプトが同名の関数を注入する(docs/development.md)
+  - The text is edited as is in a textarea. A #mirror with the same typesetting sits behind it and highlights the commented ranges
+  - Reading and writing files and sending instructions go through the __textboard* functions that textboard.ts injects with webview.bind
+  - How to launch it is defined in README.md (opened in textboard.ts's webview-bun window)
+  - When opened over http for verification, the verification script injects functions with the same names (docs/development.md)
 -->
 <html lang="en">
 <head>
@@ -211,7 +212,7 @@
     -webkit-box-orient: vertical;
     margin-bottom: 4px;
   }
-  /* コメント文はそのままクリックして直せる入力欄。普段は文字に見せ、触れると枠が出る */
+  /* The comment text is an input you can click and edit in place. It looks like plain text until hovered or focused */
   .card textarea.body {
     display: block;
     width: calc(100% + 10px);
@@ -258,7 +259,7 @@
   .card.editing .meta .hint { display: inline; }
   .card.editing .meta .line { display: none; }
 
-  /* 選んだ範囲の終わりの直下に出す。余白のカードと重なってもよく、そのときはボタンが手前 */
+  /* Shown right below the end of the selection. It may overlap the margin cards; the button stays in front */
   #add-comment {
     position: absolute;
     left: 0;
@@ -272,7 +273,7 @@
   }
   #add-comment:hover { background: #33476c; }
 
-  /* ---- composer (AI への指示) ---- */
+  /* ---- composer (instruction for the AI) ---- */
   #composer {
     flex: none;
     border-top: 1px solid var(--border);
@@ -372,7 +373,7 @@
   var RID = params.get("rid");
   var LANG = params.get("lang") || ((navigator.language || "").toLowerCase().indexOf("ja") === 0 ? "ja" : "en");
 
-  // 画面に出す文字列。ja / en の両方に足す
+  // Strings shown on screen. Add to both ja and en
   var STRINGS = {
     ja: {
       save: "保存",
@@ -489,13 +490,13 @@
     path: null,
     sidecar: null,
     lineEnding: "\n",
-    text: "",       // 今の本文(改行は \n に揃えたもの)
-    saved: "",      // ディスク上の本文(同上)
+    text: "",       // the current text (line endings normalized to \n)
+    saved: "",      // the text on disk (same)
     comments: [],   // {id, start, end, body, created, updated, lost, quote, prefix, suffix}
     activeId: null,
-    draft: null,    // 書きかけの新しいコメント {start, end}
-    focusEditorOnce: false, // 次の描画で書きかけのコメントの入力欄にフォーカスを移す
-    conflict: null, // 外で書き換えられ、未保存の編集と食い違っているときの外の本文
+    draft: null,    // the new comment being written {start, end}
+    focusEditorOnce: false, // move focus to the draft comment's input on the next render
+    conflict: null, // the outside text, when the file changed outside and conflicts with unsaved edits
     fileGone: false,
     lastSentId: null,
     lastSentDelivered: null,
@@ -516,7 +517,7 @@
   }
 
   // ---------------- banners ----------------
-  // key ごとに 1 つ。同じ key を出し直すと置き換える
+  // One per key. Showing the same key again replaces it
   function showBanner(key, kind, message, actions) {
     hideBanner(key);
     var el = document.createElement("div");
@@ -547,15 +548,15 @@
     Array.prototype.forEach.call(bannersEl.querySelectorAll('[data-key="' + key + '"]'), function (el) { el.remove(); });
   }
 
-  // ---------------- 表示 ----------------
+  // ---------------- Rendering ----------------
   function updateSaveState() {
     var d = dirty();
     saveStateEl.textContent = d ? S.unsaved : S.saved;
     saveStateEl.classList.toggle("dirty", d);
   }
 
-  // 背後の #mirror に本文を流し込み、コメントの範囲を <mark> にする。probe を渡すとその位置に
-  // 幅 0 の目印を置く(選択範囲の高さを測るため)
+  // Pour the text into the #mirror behind the editor and wrap commented ranges in <mark>. When probe is given,
+  // put a zero-width marker at that offset (to measure where the selection is)
   function renderMirror(probe) {
     var text = state.text;
     var ranges = visibleComments().map(function (c) { return { id: c.id, start: c.start, end: c.end }; });
@@ -594,7 +595,7 @@
       probeEl = document.createElement("span");
       frag.appendChild(probeEl);
     }
-    // 最後の行が空行でも高さを持つように、幅 0 の文字を足す
+    // Add a zero-width character so that an empty last line still has height
     frag.appendChild(document.createTextNode("​"));
     mirror.textContent = "";
     mirror.appendChild(frag);
@@ -620,13 +621,13 @@
   }
 
   function renderCards(firstMark) {
-    // 直している途中のコメント文は、作り直した後も同じ所にカーソルを戻す
+    // For a comment being edited, put the cursor back in the same place after rebuilding
     var focused = document.activeElement;
     var keep = focused && focused.classList.contains("body") && focused.dataset.commentId
       ? { id: focused.dataset.commentId, start: focused.selectionStart, end: focused.selectionEnd, before: focused.dataset.before }
       : null;
 
-    // 位置が分かるコメント(+ 書きかけ)を、範囲の高さの順に余白へ並べる。重なる分は下へ送る
+    // Lay out the placed comments (+ the draft) in the margin in order of their range's height. Overlapping ones are pushed down
     Array.prototype.forEach.call(cardsEl.querySelectorAll(".card"), function (el) { el.remove(); });
     lostEl.textContent = "";
 
@@ -670,8 +671,8 @@
     }
   }
 
-  // 「＋ コメント」は選んだ範囲の終わりの直下に置く(probe は範囲の終わりに置いた幅 0 の目印)。
-  // 右端では余白の右端を超えないよう左へ寄せる
+  // Put "+ Comment" right below the end of the selection (probe is the zero-width marker at the end of the range).
+  // Near the right edge, shift it left so it does not go past the margin's right edge
   function placeAddButton(probe) {
     var lineHeight = parseFloat(getComputedStyle(mirror).lineHeight) || 28;
     var wrap = $("editor-wrap");
@@ -681,7 +682,7 @@
     addBtn.style.left = Math.max(0, Math.min(probe.offsetLeft - 8, maxLeft)) + "px";
   }
 
-  // 余白のカードを、範囲の高さに合わせて上から置き直す(重なる分は下へ送る)。カードの高さが変わったときにも呼ぶ
+  // Reposition the margin cards from the top to match their ranges (overlapping ones are pushed down). Also called when a card's height changes
   var layoutEntries = [];
   function layoutCards() {
     var lostHeight = lostEl.offsetHeight ? lostEl.offsetHeight + 16 : 0;
@@ -694,8 +695,9 @@
     cardsEl.style.minHeight = bottom + "px";
   }
 
-  // Enter で確定する入力欄の共通処理。Shift+Enter(と ⌥Enter)は改行。日本語入力の変換を確定する Enter では
-  // 確定しない: Safari / WKWebView は compositionend の後に確定の keydown(keyCode 229)を出すので、isComposing と 229 の両方を見る
+  // Shared handling for inputs confirmed with Enter. Shift+Enter (and ⌥Enter) insert a new line. The Enter that confirms
+  // IME conversion does not confirm: Safari / WKWebView fire the confirming keydown (keyCode 229) after compositionend,
+  // so check both isComposing and 229
   function onPlainEnter(el, run) {
     var composing = false;
     el.addEventListener("compositionstart", function () { composing = true; });
@@ -713,7 +715,7 @@
     ta.style.height = ta.scrollHeight + 2 + "px";
   }
 
-  // 今のアクティブなコメントの表示だけを変える(カードを作り直さないので、直している途中の入力欄が消えない)
+  // Change only which comment is shown as active (cards are not rebuilt, so an input being edited is not lost)
   function setActive(id) {
     if (state.activeId === id) return;
     state.activeId = id;
@@ -724,7 +726,7 @@
     });
   }
 
-  // コメント文の入力欄。クリックしてそのまま直す。Enter か離れると確定、Esc で直す前に戻す。空にしたら元に戻す
+  // The comment text input. Click to edit in place. Enter or leaving keeps the change, Esc reverts it. Clearing it restores the previous text
   function buildBody(c) {
     var ta = document.createElement("textarea");
     ta.className = "body";
@@ -737,7 +739,7 @@
       if (ta.dataset.before === undefined) ta.dataset.before = c.body;
       ta.closest(".card").classList.add("editing");
       setActive(c.id);
-      layoutCards(); // 操作の説明が出てカードの高さが変わる
+      layoutCards(); // the key hint appears and the card's height changes
     });
     ta.addEventListener("input", function () {
       c.body = ta.value;
@@ -805,7 +807,7 @@
     }));
     card.appendChild(meta);
 
-    // 文以外(引用・行番号)を押すと、本文のその範囲へ移る
+    // Clicking anything but the text (the quote or line number) jumps to that range in the document
     card.addEventListener("click", function (e) {
       if (e.target.closest("button") || e.target.closest("textarea")) return;
       setActive(c.id);
@@ -818,7 +820,7 @@
     var b = document.createElement("button");
     b.className = "link";
     b.textContent = label;
-    // 押しても本文の選択を外さない(「選択範囲に付け直す」で選択を使うため)
+    // Keep the document's selection when clicked ("Attach to selection" uses it)
     b.addEventListener("mousedown", function (e) { e.preventDefault(); });
     b.addEventListener("click", function (e) {
       e.stopPropagation();
@@ -838,7 +840,7 @@
     return card;
   }
 
-  // 新しいコメントの入力欄。Enter で確定、Esc でやめる
+  // The input for a new comment. Enter confirms, Esc cancels
   function buildEditor(value, okLabel, onOk, onCancel) {
     var box = document.createElement("div");
     box.className = "compose";
@@ -874,7 +876,7 @@
     return box;
   }
 
-  // 本文のその範囲が見えるところまでスクロールし、範囲の先頭にカーソルを置く(選択すると「＋ コメント」が出てしまう)
+  // Scroll until the range is visible and put the cursor at its start (selecting it would bring up "+ Comment")
   function revealComment(c) {
     var marks = mirror.querySelectorAll("mark.active");
     if (marks.length > 0) {
@@ -887,14 +889,14 @@
     editor.setSelectionRange(c.start, c.start);
   }
 
-  // ---------------- 選択とコメント ----------------
+  // ---------------- Selection and comments ----------------
   function currentSelection() {
     if (document.activeElement !== editor) return null;
     if (editor.selectionStart === editor.selectionEnd) return null;
     return { start: editor.selectionStart, end: editor.selectionEnd };
   }
 
-  // 最後に本文で選んでいた範囲。コメント欄にフォーカスが移ってからも「付け直す」で使う
+  // The last selection in the document. Used by "Attach to selection" even after focus moves to a comment
   var lastSelection = null;
 
   function onSelectionMaybeChanged() {
@@ -926,7 +928,7 @@
     state.draft = null;
     state.activeId = c.id;
     persistComments();
-    // 選択を残すと「＋ コメント」が今付けたコメントの上に出るので、範囲の終わりにカーソルを置く
+    // Leaving the selection would show "+ Comment" over the comment just added, so put the cursor at the end of the range
     editor.focus({ preventScroll: true });
     editor.setSelectionRange(c.end, c.end);
     render();
@@ -955,7 +957,7 @@
   addBtn.addEventListener("mousedown", function (e) { e.preventDefault(); });
   addBtn.addEventListener("click", startDraft);
 
-  // ---------------- 本文の編集 ----------------
+  // ---------------- Editing the text ----------------
   editor.addEventListener("input", function () {
     var old = state.text;
     var next = editor.value;
@@ -991,14 +993,14 @@
   });
   document.addEventListener("selectionchange", onSelectionMaybeChanged);
   editor.addEventListener("keydown", function (e) {
-    // Tab はフォーカス移動でなく文字として入れる(取り消しが効くよう insertText で)
+    // Tab inserts a character instead of moving focus (via insertText, so it can be undone)
     if (e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey) {
       e.preventDefault();
       document.execCommand("insertText", false, "\t");
     }
   });
 
-  // ---------------- 保存 ----------------
+  // ---------------- Saving ----------------
   function commentsForDisk() {
     return state.comments.map(function (c) {
       var anchor = c.lost ? { quote: c.quote, prefix: c.prefix || "", suffix: c.suffix || "" } : A.context(state.text, c.start, c.end);
@@ -1027,7 +1029,7 @@
     });
   }
 
-  // 保存できたら true
+  // true when saved
   function save() {
     if (state.conflict !== null) {
       showConflict();
@@ -1054,8 +1056,8 @@
   }
   $("save-btn").addEventListener("click", function () { save(); });
 
-  // ---------------- 外での書き換え ----------------
-  // 外の本文で置き換え、コメントは引用と前後の文脈で探し直す
+  // ---------------- Outside changes ----------------
+  // Replace with the outside text and find each comment again by its quote and surrounding context
   function applyExternal(text) {
     var old = state.text;
     state.comments.forEach(function (c) {
@@ -1120,7 +1122,7 @@
     showConflict();
   }
 
-  // ---------------- AI への指示 ----------------
+  // ---------------- Instructions for the AI ----------------
   function buildPayload(instruction, savedBeforeSend) {
     return {
       file: state.path,
@@ -1195,7 +1197,7 @@
     instructionEl.style.height = Math.min(160, Math.max(40, instructionEl.scrollHeight + 2)) + "px";
   }
   instructionEl.addEventListener("input", autosizeInstruction);
-  // Enter で送る。Shift+Enter で改行。日本語入力の確定の Enter では送らない(onPlainEnter)
+  // Enter sends. Shift+Enter inserts a new line. The Enter that confirms IME input does not send (onPlainEnter)
   onPlainEnter(instructionEl, send);
 
   var hintTimer = null;
@@ -1226,7 +1228,7 @@
     if (state.lastSentDelivered) el.textContent = S.agentReceived(state.lastSentDelivered) + (waiting ? " — " + S.agentWaiting : "");
   }
 
-  // ---------------- キー ----------------
+  // ---------------- Keys ----------------
   document.addEventListener("keydown", function (e) {
     var mod = e.metaKey || e.ctrlKey;
     if (mod && (e.key === "w" || e.key === "W")) {
@@ -1244,7 +1246,7 @@
       save();
       return;
     }
-    // ⌘⌥M = 選んだ範囲にコメント(Google ドキュメントと同じ)。⌥ を押すと e.key は µ になるので code で見る
+    // ⌘⌥M = comment on the selection (same as Google Docs). With ⌥ held, e.key becomes µ, so check code
     if (mod && e.altKey && e.code === "KeyM") {
       e.preventDefault();
       startDraft();
@@ -1252,7 +1254,7 @@
     }
   });
 
-  // ---------------- 窓との連携 ----------------
+  // ---------------- Talking to the window process ----------------
   function startPolling() {
     if (typeof window.__textboardPoll !== "function") return;
     var busy = false;
