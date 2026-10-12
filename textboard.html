@@ -211,7 +211,25 @@
     -webkit-box-orient: vertical;
     margin-bottom: 4px;
   }
-  .card .body { white-space: pre-wrap; overflow-wrap: break-word; color: var(--text); }
+  /* コメント文はそのままクリックして直せる入力欄。普段は文字に見せ、触れると枠が出る */
+  .card textarea.body {
+    display: block;
+    width: calc(100% + 10px);
+    margin: 0 -5px;
+    padding: 2px 4px;
+    font: inherit;
+    line-height: 1.55;
+    color: var(--text);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    resize: none;
+    overflow: hidden;
+    outline: none;
+    cursor: text;
+  }
+  .card textarea.body:hover { border-color: #3a3a3a; }
+  .card textarea.body:focus { border-color: var(--blue); background: #1a1a1a; }
   .card .meta {
     display: flex;
     gap: 12px;
@@ -219,7 +237,7 @@
     font-size: 12px;
   }
   .card .meta .line { color: var(--fg-dim); flex: 1; }
-  .card textarea {
+  .card .compose textarea {
     width: 100%;
     min-height: 64px;
     font: inherit;
@@ -231,9 +249,14 @@
     resize: vertical;
     outline: none;
   }
-  .card textarea:focus { border-color: var(--blue); }
-  .card .edit-actions { display: flex; gap: 8px; margin-top: 6px; align-items: center; }
-  .card .edit-actions .hint { color: var(--fg-dim); font-size: 12px; margin-left: auto; }
+  .card .compose textarea:focus { border-color: var(--blue); }
+  .card .edit-actions { display: flex; flex-wrap: wrap; gap: 6px 8px; margin-top: 6px; align-items: center; }
+  .card .edit-actions button { white-space: nowrap; }
+  .card .edit-actions .hint { flex-basis: 100%; color: var(--fg-dim); font-size: 12px; }
+  .card .meta .hint { color: var(--fg-dim); font-size: 12px; }
+  .card .meta .hint { display: none; flex: 1; }
+  .card.editing .meta .hint { display: inline; }
+  .card.editing .meta .line { display: none; }
 
   #add-comment {
     position: absolute;
@@ -326,7 +349,7 @@
     <textarea id="instruction" rows="1"></textarea>
     <div id="composer-actions">
       <button id="copy-btn" data-i18n="copy"></button>
-      <button id="send-btn" class="primary"><span data-i18n="send"></span><kbd style="color:#cfe0ff">⌘↩</kbd></button>
+      <button id="send-btn" class="primary"><span data-i18n="send"></span><kbd style="color:#cfe0ff">↩</kbd></button>
     </div>
   </div>
   <div id="composer-status">
@@ -357,20 +380,21 @@
       copied: "指示とコメントをクリップボードにコピーしました",
       copyFailed: "コピーできませんでした",
       send: "AI に送る",
-      instructionPlaceholder: "AI への指示（例: コメントに沿って直して / もっと短く）",
+      instructionPlaceholder: "AI への指示（例: コメントに沿って直して / もっと短く）。Enter で送る、Shift+Enter で改行",
       hint: "範囲を選んで ⌘⌥M でコメント",
       addComment: "＋ コメント",
       commentPlaceholder: "コメント",
       commentSave: "コメントする",
       commentUpdate: "更新",
       cancel: "やめる",
-      edit: "編集",
+      bodyTitle: "クリックして直す",
+      bodyHint: "Enter 確定 / Shift+Enter 改行 / Esc 取り消し",
       remove: "削除",
       reattach: "選択範囲に付け直す",
       lostTitle: function (n) { return "場所が分からなくなったコメント（" + n + "）"; },
       lostHint: "本文が書き換わって、引用した文が見つからなくなりました",
       line: function (a, b) { return a === b ? a + " 行目" : a + "〜" + b + " 行目"; },
-      editHint: "⌘↩ で確定 / Esc でやめる",
+      editHint: "Enter 確定 / Shift+Enter 改行 / Esc やめる",
       agentWaiting: "AI が指示を待っています",
       agentIdle: "AI は今、受け取り待ちをしていません。送った指示は次に AI が受け取ります",
       agentSent: "送りました。AI の受け取りを待っています",
@@ -404,20 +428,21 @@
       copied: "Copied the instruction and comments to the clipboard",
       copyFailed: "Could not copy",
       send: "Send to AI",
-      instructionPlaceholder: "Instruction for the AI (e.g. address my comments / make it shorter)",
+      instructionPlaceholder: "Instruction for the AI (e.g. address my comments / make it shorter). Enter to send, Shift+Enter for a new line",
       hint: "Select text and press ⌘⌥M to comment",
       addComment: "+ Comment",
       commentPlaceholder: "Comment",
       commentSave: "Comment",
       commentUpdate: "Update",
       cancel: "Cancel",
-      edit: "Edit",
+      bodyTitle: "Click to edit",
+      bodyHint: "Enter to save / Shift+Enter: new line / Esc to undo",
       remove: "Delete",
       reattach: "Attach to selection",
       lostTitle: function (n) { return "Comments that lost their place (" + n + ")"; },
       lostHint: "The text changed and the quoted passage can no longer be found",
       line: function (a, b) { return a === b ? "line " + a : "lines " + a + "–" + b; },
-      editHint: "⌘↩ to save / Esc to cancel",
+      editHint: "Enter to save / Shift+Enter for a new line / Esc to cancel",
       agentWaiting: "The AI is waiting for an instruction",
       agentIdle: "The AI is not listening right now. It will get what you send next time it checks",
       agentSent: "Sent. Waiting for the AI to pick it up",
@@ -465,9 +490,7 @@
     comments: [],   // {id, start, end, body, created, updated, lost, quote, prefix, suffix}
     activeId: null,
     draft: null,    // 書きかけの新しいコメント {start, end}
-    editingId: null,
-    editBuffer: null, // 編集中のコメント文(再描画で消えないように持つ)
-    focusEditorOnce: false, // 次の描画でコメントの入力欄にフォーカスを移す
+    focusEditorOnce: false, // 次の描画で書きかけのコメントの入力欄にフォーカスを移す
     conflict: null, // 外で書き換えられ、未保存の編集と食い違っているときの外の本文
     fileGone: false,
     lastSentId: null,
@@ -585,7 +608,7 @@
     renderCards(m.firstMark);
     if (probe !== null && m.probeEl) {
       addBtn.style.display = "block";
-      addBtn.style.top = Math.max(0, m.probeEl.offsetTop - 2) + "px";
+      placeAddButton(Math.max(0, m.probeEl.offsetTop - 2 - lostOffset()));
     } else {
       addBtn.style.display = "none";
     }
@@ -593,6 +616,12 @@
   }
 
   function renderCards(firstMark) {
+    // 直している途中のコメント文は、作り直した後も同じ所にカーソルを戻す
+    var focused = document.activeElement;
+    var keep = focused && focused.classList.contains("body") && focused.dataset.commentId
+      ? { id: focused.dataset.commentId, start: focused.selectionStart, end: focused.selectionEnd, before: focused.dataset.before }
+      : null;
+
     // 位置が分かるコメント(+ 書きかけ)を、範囲の高さの順に余白へ並べる。重なる分は下へ送る
     Array.prototype.forEach.call(cardsEl.querySelectorAll(".card"), function (el) { el.remove(); });
     lostEl.textContent = "";
@@ -612,23 +641,136 @@
     if (state.draft) entries.push({ comment: null, top: firstMark.draft ? firstMark.draft.offsetTop : 0, start: state.draft.start });
     entries.sort(function (a, b) { return a.top - b.top || a.start - b.start; });
 
-    var lostHeight = lostEl.offsetHeight ? lostEl.offsetHeight + 16 : 0;
-    var bottom = 0;
-    entries.forEach(function (e) {
+    layoutEntries = entries.map(function (e) {
       var card = e.comment ? buildCard(e.comment, false) : buildDraftCard();
       cardsEl.appendChild(card);
-      var top = Math.max(e.top - lostHeight, bottom);
-      card.style.top = top + "px";
-      bottom = top + card.offsetHeight + 8;
+      return { card: card, top: e.top };
     });
-    cardsEl.style.minHeight = bottom + "px";
+    Array.prototype.forEach.call(document.querySelectorAll(".card textarea.body"), autosizeBody);
+    layoutCards();
     state.focusEditorOnce = false;
+    if (keep) {
+      var again = document.querySelector('.card textarea.body[data-comment-id="' + keep.id + '"]');
+      if (again) {
+        again.dataset.before = keep.before;
+        again.focus({ preventScroll: true });
+        again.setSelectionRange(keep.start, keep.end);
+        again.closest(".card").classList.add("editing");
+      }
+    }
     var focusEl = cardsEl.querySelector("textarea[data-autofocus]") || lostEl.querySelector("textarea[data-autofocus]");
     if (focusEl) {
       focusEl.removeAttribute("data-autofocus");
       focusEl.focus();
       focusEl.setSelectionRange(focusEl.value.length, focusEl.value.length);
     }
+  }
+
+  function lostOffset() {
+    return lostEl.offsetHeight ? lostEl.offsetHeight + 16 : 0;
+  }
+
+  // 「＋ コメント」は選んだ範囲の高さに置く。そこにカードがあれば、重ならないようカードの下へずらす
+  function placeAddButton(top) {
+    var height = addBtn.offsetHeight || 28;
+    layoutEntries.forEach(function (e) {
+      var cardTop = e.card.offsetTop;
+      var cardBottom = cardTop + e.card.offsetHeight;
+      if (top < cardBottom && top + height > cardTop) top = cardBottom + 6;
+    });
+    addBtn.style.top = top + "px";
+  }
+
+  // 余白のカードを、範囲の高さに合わせて上から置き直す(重なる分は下へ送る)。カードの高さが変わったときにも呼ぶ
+  var layoutEntries = [];
+  function layoutCards() {
+    var lostHeight = lostEl.offsetHeight ? lostEl.offsetHeight + 16 : 0;
+    var bottom = 0;
+    layoutEntries.forEach(function (e) {
+      var top = Math.max(e.top - lostHeight, bottom);
+      e.card.style.top = top + "px";
+      bottom = top + e.card.offsetHeight + 8;
+    });
+    cardsEl.style.minHeight = bottom + "px";
+  }
+
+  // Enter で確定する入力欄の共通処理。Shift+Enter(と ⌥Enter)は改行。日本語入力の変換を確定する Enter では
+  // 確定しない: Safari / WKWebView は compositionend の後に確定の keydown(keyCode 229)を出すので、isComposing と 229 の両方を見る
+  function onPlainEnter(el, run) {
+    var composing = false;
+    el.addEventListener("compositionstart", function () { composing = true; });
+    el.addEventListener("compositionend", function () { composing = false; });
+    el.addEventListener("keydown", function (e) {
+      if (e.key !== "Enter" || e.shiftKey || e.altKey) return;
+      if (composing || e.isComposing || e.keyCode === 229) return;
+      e.preventDefault();
+      run();
+    });
+  }
+
+  function autosizeBody(ta) {
+    ta.style.height = "auto";
+    ta.style.height = ta.scrollHeight + 2 + "px";
+  }
+
+  // 今のアクティブなコメントの表示だけを変える(カードを作り直さないので、直している途中の入力欄が消えない)
+  function setActive(id) {
+    if (state.activeId === id) return;
+    state.activeId = id;
+    renderMirror(null);
+    addBtn.style.display = "none";
+    Array.prototype.forEach.call(document.querySelectorAll(".card[data-id]"), function (el) {
+      el.classList.toggle("active", el.dataset.id === id);
+    });
+  }
+
+  // コメント文の入力欄。クリックしてそのまま直す。Enter か離れると確定、Esc で直す前に戻す。空にしたら元に戻す
+  function buildBody(c) {
+    var ta = document.createElement("textarea");
+    ta.className = "body";
+    ta.rows = 1;
+    ta.value = c.body;
+    ta.spellcheck = false;
+    ta.title = S.bodyTitle;
+    ta.dataset.commentId = c.id;
+    ta.addEventListener("focus", function () {
+      if (ta.dataset.before === undefined) ta.dataset.before = c.body;
+      ta.closest(".card").classList.add("editing");
+      setActive(c.id);
+      layoutCards(); // 操作の説明が出てカードの高さが変わる
+    });
+    ta.addEventListener("input", function () {
+      c.body = ta.value;
+      autosizeBody(ta);
+      layoutCards();
+    });
+    onPlainEnter(ta, function () { ta.blur(); });
+    ta.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        ta.value = ta.dataset.before;
+        c.body = ta.value;
+        autosizeBody(ta);
+        ta.blur();
+      }
+    });
+    ta.addEventListener("blur", function () {
+      var before = ta.dataset.before;
+      delete ta.dataset.before;
+      var card = ta.closest(".card");
+      if (card) card.classList.remove("editing");
+      var next = ta.value.replace(/\s+$/, "");
+      if (next.trim() === "") next = before;
+      ta.value = next;
+      c.body = next;
+      autosizeBody(ta);
+      layoutCards();
+      if (next !== before) {
+        c.updated = new Date().toISOString();
+        persistComments();
+      }
+    });
+    return ta;
   }
 
   function buildCard(c, isLost) {
@@ -640,26 +782,7 @@
     quote.textContent = "“" + (isLost ? c.quote : state.text.slice(c.start, c.end)) + "”";
     card.appendChild(quote);
 
-    if (state.editingId === c.id) {
-      card.appendChild(buildEditor(state.editBuffer !== null ? state.editBuffer : c.body, S.commentUpdate, function (body) {
-        c.body = body;
-        c.updated = new Date().toISOString();
-        state.editingId = null;
-        state.editBuffer = null;
-        persistComments();
-        render();
-      }, function () {
-        state.editingId = null;
-        state.editBuffer = null;
-        render();
-      }));
-      return card;
-    }
-
-    var body = document.createElement("div");
-    body.className = "body";
-    body.textContent = c.body;
-    card.appendChild(body);
+    card.appendChild(buildBody(c));
 
     var meta = document.createElement("div");
     meta.className = "meta";
@@ -667,15 +790,13 @@
     line.className = "line";
     line.textContent = isLost ? "" : lineLabel(c);
     meta.appendChild(line);
+    var hint = document.createElement("span");
+    hint.className = "hint";
+    hint.textContent = S.bodyHint;
+    meta.appendChild(hint);
     if (isLost) {
       meta.appendChild(linkButton(S.reattach, function () { reattach(c); }));
     }
-    meta.appendChild(linkButton(S.edit, function () {
-      state.editingId = c.id;
-      state.editBuffer = null;
-      state.focusEditorOnce = true;
-      render();
-    }));
     meta.appendChild(linkButton(S.remove, function () {
       state.comments = state.comments.filter(function (x) { return x !== c; });
       if (state.activeId === c.id) state.activeId = null;
@@ -684,10 +805,10 @@
     }));
     card.appendChild(meta);
 
+    // 文以外(引用・行番号)を押すと、本文のその範囲へ移る
     card.addEventListener("click", function (e) {
-      if (e.target.closest("button")) return;
-      state.activeId = c.id;
-      render();
+      if (e.target.closest("button") || e.target.closest("textarea")) return;
+      setActive(c.id);
       if (!isLost) revealComment(c);
     });
     return card;
@@ -717,22 +838,18 @@
     return card;
   }
 
-  // コメント文の入力欄。⌘↩ で確定、Esc でやめる
+  // 新しいコメントの入力欄。Enter で確定、Esc でやめる
   function buildEditor(value, okLabel, onOk, onCancel) {
     var box = document.createElement("div");
+    box.className = "compose";
     var ta = document.createElement("textarea");
     ta.value = value;
     ta.placeholder = S.commentPlaceholder;
     if (state.focusEditorOnce) ta.setAttribute("data-autofocus", "");
-    ta.addEventListener("input", function () {
-      if (onOk === commitDraft) { if (state.draft) state.draft.body = ta.value; }
-      else state.editBuffer = ta.value;
-    });
+    ta.addEventListener("input", function () { if (state.draft) state.draft.body = ta.value; });
+    onPlainEnter(ta, function () { if (ta.value.trim()) onOk(ta.value.trim()); });
     ta.addEventListener("keydown", function (e) {
-      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        if (ta.value.trim()) onOk(ta.value.trim());
-      } else if (e.key === "Escape") {
+      if (e.key === "Escape") {
         e.preventDefault();
         onCancel();
       }
@@ -757,7 +874,7 @@
     return box;
   }
 
-  // 本文のその範囲が見えるところまでスクロールし、範囲を選択する
+  // 本文のその範囲が見えるところまでスクロールし、範囲の先頭にカーソルを置く(選択すると「＋ コメント」が出てしまう)
   function revealComment(c) {
     var marks = mirror.querySelectorAll("mark.active");
     if (marks.length > 0) {
@@ -767,7 +884,7 @@
       }
     }
     editor.focus({ preventScroll: true });
-    editor.setSelectionRange(c.start, c.end);
+    editor.setSelectionRange(c.start, c.start);
   }
 
   // ---------------- 選択とコメント ----------------
@@ -798,7 +915,6 @@
     var sel = currentSelection() || lastSelection;
     if (!sel || sel.start === sel.end) return;
     state.draft = { start: sel.start, end: sel.end, body: "" };
-    state.editingId = null;
     state.focusEditorOnce = true;
     render();
   }
@@ -1079,12 +1195,8 @@
     instructionEl.style.height = Math.min(160, Math.max(40, instructionEl.scrollHeight + 2)) + "px";
   }
   instructionEl.addEventListener("input", autosizeInstruction);
-  instructionEl.addEventListener("keydown", function (e) {
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
-      send();
-    }
-  });
+  // Enter で送る。Shift+Enter で改行。日本語入力の確定の Enter では送らない(onPlainEnter)
+  onPlainEnter(instructionEl, send);
 
   var hintTimer = null;
   function flashHint(message) {
@@ -1196,6 +1308,10 @@
     });
     instructionEl.placeholder = S.instructionPlaceholder;
     addBtn.textContent = S.addComment;
+    var k = document.createElement("kbd");
+    k.style.color = "#cfe0ff";
+    k.textContent = "⌘⌥M";
+    addBtn.appendChild(k);
     $("hint").textContent = S.hint;
   }
 

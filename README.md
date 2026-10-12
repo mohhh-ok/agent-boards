@@ -37,7 +37,9 @@ The text is edited as is: Markdown is not rendered, so what you see is exactly w
 
 ### Comments
 
-Select a passage. A "+ Comment" button appears in the margin; click it or press `⌘⌥M`, write the comment, and press `⌘↩`. The passage is highlighted and the comment is shown beside it. Click a comment to jump to its passage; click inside a highlighted passage to bring its comment forward. Comments can be edited and deleted.
+Select a passage. A "+ Comment ⌘⌥M" button appears in the margin; click it or press `⌘⌥M`, write the comment, and press `Enter` (`Shift+Enter` for a new line, `Esc` to cancel). The passage is highlighted and the comment is shown beside it. Click inside a highlighted passage to bring its comment forward; click a comment's quote or line number to jump to its passage.
+
+To change a comment, click its text and type. Press `Enter` or click elsewhere to keep the change (`Shift+Enter` for a new line); `Esc` undoes it. Clearing the text keeps the previous comment; use "Delete" to remove one.
 
 - Editing inside the window moves comments with the text. Editing inside a commented passage keeps the comment on the edited passage
 - When the file changes outside the window (the agent rewrote it), each comment is found again by the text it quoted and the text around it. A comment whose passage is gone is listed under "Comments that lost their place". Select a new passage and use "Attach to selection" to put it back, or delete it
@@ -46,7 +48,7 @@ Select a passage. A "+ Comment" button appears in the margin; click it or press 
 
 ### Sending an instruction to the AI
 
-Write the instruction in the box at the bottom and press `⌘↩` (or "Send to AI"). Unsaved edits are saved first. The status line under the box tells you whether the agent is listening and when it picked up your instruction.
+Write the instruction in the box at the bottom and press `Enter` (or "Send to AI"). `Shift+Enter` starts a new line. The `Enter` that confirms Japanese (or other IME) input does not send. Unsaved edits are saved first. The status line under the box tells you whether the agent is listening and when it picked up your instruction.
 
 You can send with an empty instruction if you only want the agent to address your comments.
 
@@ -63,8 +65,8 @@ You can send with an empty instruction if you only want the agent to address you
 | --- | --- |
 | `⌘S` | Save |
 | `⌘⌥M` | Comment on the selection |
-| `⌘↩` | Send the instruction (in the instruction box) / confirm a comment (in a comment box) |
-| `Esc` | Cancel the comment you are writing |
+| `Enter` | Send the instruction (in the instruction box) / save a comment you are writing or changing. `Shift+Enter` for a new line. The `Enter` that confirms IME input does neither |
+| `Esc` | Cancel the comment you are writing, or undo the change to a comment |
 | `⌘Z` / `⌘⇧Z`, `⌘X` / `⌘C` / `⌘V`, `⌘A` | Undo / redo, cut / copy / paste, select all (from the Edit menu) |
 | `⌘W` | Close the window. With unsaved edits, the first `⌘W` warns and a second one closes |
 

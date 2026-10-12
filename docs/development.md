@@ -19,7 +19,7 @@ Notes for changing the window itself. For usage, see the [README](../README.md).
 - Comment positions: edits inside the window shift ranges by the diff of one `input` event (`anchor.diff` + `anchor.shiftRange`, with the caret to resolve ambiguous repeats). Outside changes and reopening search again by quote + 32 characters of context on each side (`anchor.locate`)
 - Comments are stored in `~/.textboard/comments/<sha256 of the absolute path>.json` (`TEXTBOARD_HOME` changes `~/.textboard`, for verification), never next to the document, so the user's repository stays clean. The window process adds `file` (the absolute path) to the JSON. Moving or renaming the document detaches its comments; this is accepted
 - The comments file is written to a temporary file and renamed, so a symlink placed at that path is replaced, not followed
-- Edit menu: macOS delivers `⌘Z` / `⌘C` / `⌘V` etc. through the menu bar, and webview creates no menu, so without `editMenu.ts` those keys do nothing in the editor. Keys the page handles itself (`⌘S`, `⌘W`, `⌘↩`, `⌘⌥M`) must not be added to the menu, or they no longer reach the page
+- Edit menu: macOS delivers `⌘Z` / `⌘C` / `⌘V` etc. through the menu bar, and webview creates no menu, so without `editMenu.ts` those keys do nothing in the editor. Keys the page handles itself (`⌘S`, `⌘W`, `⌘⌥M`) must not be added to the menu, or they no longer reach the page
 - Display language: window strings are in `STRINGS` in `textboard.html`, CLI messages in `MESSAGES` in `textboard.ts`. Add to both languages
 
 ## Verifying changes in the real window
