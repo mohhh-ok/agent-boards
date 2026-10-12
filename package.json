@@ -1,0 +1,17 @@
+{
+  "name": "textboard",
+  "version": "0.1.0",
+  "description": "A macOS window for revising text with your coding agent. Edit the file, leave comments anywhere, and send instructions back to the agent.",
+  "type": "module",
+  "bin": {
+    "textboard": "./textboard.ts"
+  },
+  "scripts": {
+    "test": "bun test"
+  },
+  "license": "MIT",
+  "author": "MOhhh",
+  "dependencies": {
+    "webview-bun": "^2.4.0"
+  }
+}
