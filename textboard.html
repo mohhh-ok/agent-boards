@@ -258,10 +258,13 @@
   .card.editing .meta .hint { display: inline; }
   .card.editing .meta .line { display: none; }
 
+  /* 選んだ範囲の終わりの直下に出す。余白のカードと重なってもよく、そのときはボタンが手前 */
   #add-comment {
     position: absolute;
     left: 0;
-    z-index: 5;
+    z-index: 20;
+    white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
     display: none;
     background: #2a3a58;
     border-color: #3f5a8c;
@@ -336,10 +339,11 @@
     <div id="editor-wrap">
       <div id="mirror" aria-hidden="true"></div>
       <textarea id="editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+      <button id="add-comment"></button>
     </div>
     <aside id="margin">
       <div id="lost"></div>
-      <div id="cards"><button id="add-comment"></button></div>
+      <div id="cards"></div>
     </aside>
   </div>
 </div>
@@ -603,12 +607,12 @@
 
   function render() {
     var sel = currentSelection();
-    var probe = sel && !state.draft ? sel.start : null;
+    var probe = sel && !state.draft ? sel.end : null;
     var m = renderMirror(probe);
     renderCards(m.firstMark);
     if (probe !== null && m.probeEl) {
       addBtn.style.display = "block";
-      placeAddButton(Math.max(0, m.probeEl.offsetTop - 2 - lostOffset()));
+      placeAddButton(m.probeEl);
     } else {
       addBtn.style.display = "none";
     }
@@ -666,19 +670,15 @@
     }
   }
 
-  function lostOffset() {
-    return lostEl.offsetHeight ? lostEl.offsetHeight + 16 : 0;
-  }
-
-  // 「＋ コメント」は選んだ範囲の高さに置く。そこにカードがあれば、重ならないようカードの下へずらす
-  function placeAddButton(top) {
-    var height = addBtn.offsetHeight || 28;
-    layoutEntries.forEach(function (e) {
-      var cardTop = e.card.offsetTop;
-      var cardBottom = cardTop + e.card.offsetHeight;
-      if (top < cardBottom && top + height > cardTop) top = cardBottom + 6;
-    });
-    addBtn.style.top = top + "px";
+  // 「＋ コメント」は選んだ範囲の終わりの直下に置く(probe は範囲の終わりに置いた幅 0 の目印)。
+  // 右端では余白の右端を超えないよう左へ寄せる
+  function placeAddButton(probe) {
+    var lineHeight = parseFloat(getComputedStyle(mirror).lineHeight) || 28;
+    var wrap = $("editor-wrap");
+    var margin = $("margin");
+    var maxLeft = margin.offsetLeft + margin.offsetWidth - wrap.offsetLeft - addBtn.offsetWidth;
+    addBtn.style.top = probe.offsetTop + lineHeight + 2 + "px";
+    addBtn.style.left = Math.max(0, Math.min(probe.offsetLeft - 8, maxLeft)) + "px";
   }
 
   // 余白のカードを、範囲の高さに合わせて上から置き直す(重なる分は下へ送る)。カードの高さが変わったときにも呼ぶ
