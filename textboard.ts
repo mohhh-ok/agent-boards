@@ -37,6 +37,7 @@ import {
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import { installEditMenu } from "./editMenu.ts";
 
 if (process.getuid === undefined) throw new Error("textboard supports POSIX environments only");
 const USER_ID = process.getuid();
@@ -61,7 +62,7 @@ export const SIDECAR_SUFFIX = ".textboard.json";
 const scriptPath = fileURLToPath(import.meta.url);
 const htmlPath = resolve(dirname(scriptPath), "textboard.html");
 
-type WindowConfig = { target: string; url: string; requestId: string };
+type WindowConfig = { target: string; url: string; requestId: string; lang: Lang };
 type Ack = { pid: number; refused?: "unsaved" };
 // ページへ渡す 1 回分の表示内容。boards/<rid>.json に書き、ページが __textboardLoad(rid) で読む
 type Board = { path: string };
@@ -215,7 +216,7 @@ async function showFile(target: string, path: string): Promise<number> {
   } else {
     logPath = join(LOGS_DIR, `${requestId}.log`);
     const logFd = openSync(logPath, "a");
-    const config: WindowConfig = { target, url, requestId };
+    const config: WindowConfig = { target, url, requestId, lang };
     child = spawn(process.execPath, [scriptPath, "--window", JSON.stringify(config)], {
       detached: true,
       stdio: ["ignore", logFd, logFd],
@@ -287,6 +288,10 @@ function runWindow(config: WindowConfig) {
   const webview = new Webview();
   webview.title = `textboard — ${config.target}`;
   webview.size = { width: 1180, height: 860, hint: SizeHint.NONE };
+  installEditMenu(config.lang);
+  // 検証用: 実機の窓でページの操作を再現するスクリプトを差し込む(docs/development.md)。通常の起動では使わない
+  const devInit = process.env.TEXTBOARD_DEV_INIT_SCRIPT;
+  if (devInit) webview.init(readFileSync(devInit, "utf8"));
 
   // run() 中は Bun のイベントループが止まるため、callback は同期 I/O だけで書く
   webview.bind("__textboardLoad", (rid: string) => {
@@ -333,7 +338,12 @@ function runWindow(config: WindowConfig) {
     try {
       const sidecar = sidecarPath(currentPath);
       if (json === null) rmSync(sidecar, { force: true });
-      else writeFileSync(sidecar, json);
+      else {
+        // 置いてある symlink の先を書き換えないよう、一時ファイルに書いて rename で置き換える
+        const tmp = `${sidecar}.${process.pid}.tmp`;
+        writeFileSync(tmp, json, { flag: "wx" });
+        renameSync(tmp, sidecar);
+      }
       return { ok: true };
     } catch (error) {
       return { ok: false, error: (error as Error).message };

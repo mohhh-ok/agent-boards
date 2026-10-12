@@ -44,6 +44,7 @@
     color: var(--fg);
     font-family: -apple-system, "Hiragino Sans", "Helvetica Neue", Arial, sans-serif;
     font-size: 13px;
+    -webkit-font-smoothing: antialiased;
   }
 
   body {
@@ -809,8 +810,10 @@
     state.draft = null;
     state.activeId = c.id;
     persistComments();
-    render();
+    // 選択を残すと「＋ コメント」が今付けたコメントの上に出るので、範囲の終わりにカーソルを置く
     editor.focus({ preventScroll: true });
+    editor.setSelectionRange(c.end, c.end);
+    render();
   }
 
   function cancelDraft() {
@@ -997,6 +1000,7 @@
       return;
     }
     state.conflict = text;
+    hideBanner("reloaded");
     showConflict();
   }
 
