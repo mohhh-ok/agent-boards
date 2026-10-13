@@ -425,18 +425,21 @@ function render(report, { keepOpen }) {
   );
   $toc.hidden = report.headings.length < 2;
 
+  // Every row gets its open/close button here, short ones too: "Edit with AI" can make a row openable later.
+  // measureRows decides whether it is shown
   for (const row of document.querySelectorAll(".ledger-row")) {
     const body = row.querySelector(".ledger-body");
-    if (!body) continue;
-    const text = document.createElement("div");
-    text.className = "ledger-text";
-    text.append(...body.childNodes);
-    body.append(text);
+    if (body) {
+      const text = document.createElement("div");
+      text.className = "ledger-text";
+      text.append(...body.childNodes);
+      body.append(text);
+    }
     const more = document.createElement("button");
     more.type = "button";
     more.className = "ledger-more";
     row.append(more);
-    if (keepOpen.has(row.querySelector(".ledger-name").textContent)) row.classList.add("is-open");
+    setRowOpen(row, keepOpen.has(row.querySelector(".ledger-name").textContent));
   }
   for (const th of $report.querySelectorAll("th.num")) th.title = T.columnScale;
   for (const list of $report.querySelectorAll(":scope > ul, :scope > ol:not(.ledger)")) {
@@ -704,16 +707,8 @@ function measureRows() {
     if (wasOpen) row.classList.add("is-open");
     // A row with "Edit with AI" opens to show the button even when its details fit
     const canOpen = clipped || row.querySelector(".edit-with-ai") !== null;
-    if (!canOpen && wasOpen) row.classList.remove("is-open");
     row.classList.toggle("has-more", canOpen);
-    if (!row.querySelector(".ledger-more")) {
-      if (!canOpen) continue;
-      const more = document.createElement("button");
-      more.type = "button";
-      more.className = "ledger-more";
-      row.querySelector(".ledger-body").after(more);
-    }
-    row.querySelector(".ledger-more")?.setAttribute("aria-label", wasOpen ? T.less : T.more);
+    setRowOpen(row, wasOpen && canOpen);
   }
   for (const tools of document.querySelectorAll(".ledger-tools")) {
     const rows = [...tools.nextElementSibling.querySelectorAll(".ledger-row.has-more")];

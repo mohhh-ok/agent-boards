@@ -10,6 +10,7 @@ Notes for changing the window itself. For usage, see [reportboard.md](reportboar
 - `lib/threads.ts`: conversations per section, stored in `~/.reportboard/threads/`. Every change to a threads file happens under `<file>.lock` (a directory), so the window and `reply` writing at once lose nothing (`test/concurrency.test.ts`)
 - `lib/outbox.ts`, `lib/windows.ts`, `lib/lang.ts`: shared with textboard (and moodboard for the last two)
 - `scripts/preview-report.ts`: writes the page with a report baked in, for checking in a browser
+- `test/reportboard-page.test.ts`: runs the page script in happy-dom with the bound functions stubbed, for behaviour that does not depend on layout (happy-dom measures nothing, so no row counts as clipped)
 
 ## How it works
 
@@ -22,6 +23,6 @@ Notes for changing the window itself. For usage, see [reportboard.md](reportboar
 
 ## Verifying
 
-- Layout: `bun scripts/preview-report.ts <file.md> /tmp/x/preview.html ja [--next <edited.md>]` (with `--next`, setting `window.__deliverNext = true` in the page makes the next poll deliver the edited version, to see the change marks), serve `/` over http, and open it in headless WebKit (closest to the real WKWebView) at the widths you check. The preview stubs the bound functions; sending works inside the page, with no AI reply
+- Layout: `bun scripts/preview-report.ts <file.md> /tmp/x/preview.html ja [--threads <threads.json>] [--next <edited.md>]` (with `--threads <threads.json>`, the page opens with those conversations already saved, an array of `{ id, heading, messages, sectionId }`; with `--next`, setting `window.__deliverNext = true` in the page makes the next poll deliver the edited version, to see the change marks), serve `/` over http, and open it in headless WebKit (closest to the real WKWebView) at the widths you check. The preview stubs the bound functions; sending works inside the page, with no AI reply
 - The real window: `REPORTBOARD_DEV_INIT_SCRIPT=<file.js>` when opening a new window injects a script into every page load, to click buttons and send through the DOM. `REPORTBOARD_HOME=<dir>` keeps verification threads out of `~/.reportboard`. Check the results through `wait`'s output and the threads file. Do not bring the window to the front to take a screenshot: the user's typing goes into it
 - `screencapture -l <window id>` of a window hidden behind others can show an old frame, because WebKit stops painting it
