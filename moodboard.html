@@ -1,0 +1,1794 @@
+<!DOCTYPE html>
+<!--
+  moodboard.html — 生成画像(PNG/WebP/animated GIF)・動画(mov/webm/mp4)・音声(wav/mp3/m4a/aac/flac/ogg/opus)を
+  複数並べて確認するための完全自己完結の静的ビューア(ライトテーブル方式)。
+  ビルド不要・外部依存ゼロ・vanilla JS・1ファイル。
+
+  動画は拡張子(mov/webm/mp4・大小無視)、音声は拡張子(wav/mp3/m4a/aac/flac/ogg/opus・大小無視)で自動判定する。
+  動画は <video autoplay muted loop playsinline> で描画する。ライトテーブル上は全部ミュート(複数が同時に
+  鳴るとうるさい)。音はライトボックスで1本ずつ出す(既定で音あり・m でミュート切替)。ライトボックスの
+  動画には音声カードと同じ操作バー(再生/一時停止・シークバー・経過/総時間)を付ける。透過 alpha 付き待機
+  ループ動画の見比べにも使う想定(背景切替=市松で透過確認)。webm(VP9 alpha)は WKWebView で再生できない
+  ことがあり、その場合は再生不可の表示にフォールバックする。
+
+  音声はカード上に再生/一時停止ボタン・シークバー・経過/総時間を持つプレイヤーとして表示し、ライトボックス
+  では扱わない(クリックで開かない。lightbox の ←/→ は音声を飛ばす)。同時に鳴るのは1本だけ。
+
+  アイテムはセクション(見出し + 説明文)にグルーピングでき、各カードにはラベル(未指定ならファイル名)が
+  付く。board(セクション・ラベルの構造)は moodboard.ts が /tmp/moodboard-<uid>/boards/<rid>.json に書き、
+  このページは起動時に bind 関数 __moodboardLoad(rid) を呼んで読む。URL には rid だけが乗る。
+
+  起動手順の正は README.md(moodboard.ts の webview-bun 窓で開く。サーバ・ブラウザ不要)。
+
+  使い方:
+    moodboard [--target <名前>] <画像/動画/音声パス...>
+    moodboard [--target <名前>] --json <board.json>
+
+  注意: `open "file://...?クエリ"` は macOS の LaunchServices がクエリを落とすため不可。
+  ブラウザで開きたい場合のみ、/ を配信するローカルサーバ経由の http で開く(toImgSrc が両対応)。
+  その場合 __moodboardLoad / __moodboardReady / __moodboardPoll はホスト側(検証スクリプト)が
+  page.exposeFunction 等で注入する。
+-->
+<html lang="en" data-bg="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>moodboard</title>
+<style>
+  :root {
+    --cell: 220px;
+    --fg: #d8d8d8;
+    --fg-dim: #8a8a8a;
+    --border: #333;
+    --header-bg: #202020;
+    --page-bg: #141414;
+    --card-bg: #1c1c1c;
+    --error: #b04040;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--page-bg);
+    color: var(--fg);
+    font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
+    font-size: 13px;
+    height: 100%;
+  }
+
+  /* ---- background cycle target (card image area / lightbox) ---- */
+  html[data-bg="dark"] body,
+  html[data-bg="dark"] #lightbox-backdrop {
+    background: #1a1a1a;
+  }
+  html[data-bg="white"] body,
+  html[data-bg="white"] #lightbox-backdrop {
+    background: #ffffff;
+  }
+  html[data-bg="checker"] body,
+  html[data-bg="checker"] #lightbox-backdrop {
+    background-color: #cccccc;
+    background-image:
+      linear-gradient(45deg, #999 25%, transparent 25%),
+      linear-gradient(-45deg, #999 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #999 75%),
+      linear-gradient(-45deg, transparent 75%, #999 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+  }
+
+  /* 市松・白の背景ではキャンバス上の文字(セクション見出し・説明・カードのラベル)が明るい灰色のままだと
+     読めないので、濃い色に切り替える。ヘッダー・ライトボックスの文字は背景が変わらないので対象外 */
+  html[data-bg="checker"],
+  html[data-bg="white"] {
+    --canvas-fg: #111;
+    --canvas-fg-dim: #333;
+  }
+
+  /* ---------------- header ---------------- */
+  /* flex-wrap: wrap にして、狭い窓でボタン列や shortcuts-hint が収まりきらないときは
+     自然に2段目へ折り返す(画面外に切れる・重なるのを防ぐ)。高さは min-height にして
+     折り返し時に自動で伸びるようにする(固定 height だと2段目が枠外に隠れる) */
+  #header {
+    position: sticky;
+    top: 0;
+    z-index: 100000; /* item の zIndex は掴むたび増えるので大きく取る */
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 18px;
+    min-height: 40px;
+    padding: 6px 12px;
+    background: var(--header-bg);
+    border-bottom: 1px solid var(--border);
+  }
+
+  #image-count {
+    color: var(--fg-dim);
+    flex: 0 0 auto;
+  }
+
+  #grid-size-control {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+  }
+
+  #grid-size-control input[type="range"] {
+    width: 120px;
+  }
+
+  #grid-size-label {
+    font-variant-numeric: tabular-nums;
+    color: var(--fg-dim);
+    width: 3.5em;
+  }
+
+  #bg-toggle,
+  .hdr-btn {
+    flex: 0 0 auto;
+    background: #2a2a2a;
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 10px;
+    font: inherit;
+    cursor: pointer;
+  }
+  #bg-toggle:hover,
+  .hdr-btn:hover { background: #333; }
+  .hdr-btn[disabled] { opacity: 0.4; cursor: default; }
+  .hdr-btn[disabled]:hover { background: #2a2a2a; }
+  #select-toggle.active {
+    background: #3a5a8a;
+    border-color: #4a6a9a;
+  }
+  #select-toggle.active:hover { background: #4a6a9a; }
+  .select-only { display: none; }
+  body.selecting .select-only { display: inline-flex; align-items: center; }
+
+  /* 省略記号(ellipsis)で切り詰めない: 内容は操作の説明でありユーザーが読めることが必須。
+     flex-basis を確保しつつ min-width:0 で縮められるようにし、収まらない分は
+     white-space:normal で折り返す(必要なら #header の flex-wrap で2段目に丸ごと落ちる) */
+  /* min-width は、これより狭くしか取れないとき(狭い窓・選択モードでボタンが増えたとき)に
+     ヒントを #header の 2 段目へ丸ごと落とし、ボタンの横で細長く何行にも折り返さないための値 */
+  #shortcuts-hint {
+    flex: 1 1 420px;
+    min-width: 420px;
+    color: var(--fg-dim);
+    text-align: left;
+    font-size: 11px;
+    line-height: 1.7;
+    white-space: normal;
+  }
+  /* inline-block 同士の間は空白なしでも折り返せる。間隔は margin だけで取る */
+  #shortcuts-hint .hint-item {
+    display: inline-block;
+    white-space: nowrap;
+    margin-right: 0.75em;
+  }
+  /* まとまりの区切りは余白だけで示す(縦線にすると、折り返して行頭に来たとき線だけが浮く) */
+  #shortcuts-hint .hint-group {
+    display: inline-block;
+    margin-right: 1.8em;
+  }
+  body.selecting #shortcuts-hint .hint-default { display: none; }
+  #shortcuts-hint .hint-select { display: none; }
+  body.selecting #shortcuts-hint .hint-select { display: inline; }
+
+  /* ---------------- light table(自由配置キャンバス) ---------------- */
+  /* 画像はクリッピングなし。ドラッグでどこへでも動かせ、重ねて比較できる */
+  #canvas {
+    position: relative;
+    /* header は折り返すと 40px より高くなるが、これは「最低このくらいの高さは確保する」という
+       目安値であり、canvas は #header の直後に通常フローで続くだけなので実際の重なり・位置には
+       影響しない(ズレるのは空アイテム時の余白量だけ) */
+    min-height: calc(100vh - 40px);
+  }
+
+  /* ---- section heading(見出し + 説明) ---- */
+  .section-heading {
+    position: absolute;
+  }
+  .section-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--canvas-fg, var(--fg));
+    margin-bottom: 4px;
+  }
+  .section-note {
+    font-size: 12px;
+    color: var(--canvas-fg-dim, var(--fg-dim));
+    white-space: pre-wrap; /* 改行保持 */
+    line-height: 1.6;
+  }
+
+  .item {
+    position: absolute;
+    cursor: grab;
+  }
+  .item.grabbing { cursor: grabbing; }
+  body.selecting .item { cursor: pointer; }
+
+  /* ---- selection checkbox ---- */
+  .item-check {
+    display: none;
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    width: 22px;
+    height: 22px;
+    border: 2px solid #fff;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.55);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+    z-index: 2;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    color: transparent;
+    line-height: 1;
+    user-select: none;
+    -webkit-user-select: none;
+    pointer-events: none; /* クリックは item 側で受ける(伝播回避) */
+  }
+  body.selecting .item-check { display: flex; }
+  .item.selected .item-check {
+    background: #3a7ad4;
+    border-color: #6ea3ea;
+    color: #fff;
+  }
+  .item.selected img,
+  .item.selected video {
+    outline: 2px solid #6ea3ea;
+    outline-offset: -1px;
+  }
+  .item.selected .audio-player {
+    outline: 2px solid #6ea3ea;
+    outline-offset: -1px;
+  }
+
+  .item img,
+  .item video {
+    display: block;
+    width: 100%;
+    height: auto;
+    border: 1px solid var(--border);
+    box-sizing: border-box;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .item:hover img,
+  .item:hover video { border-color: #555; }
+  .item img.pixelated,
+  .item video.pixelated { image-rendering: pixelated; }
+
+  /* ---- audio player card ---- */
+  .item .audio-player {
+    /* 高さは JS(applyItemStyle)が AUDIO_CARD_HEIGHT(操作 UI に合わせた固定値)を inline style で
+       設定する。幅だけが基準サイズ・ホイールで変わり、高さは変わらない(空白の箱にしない) */
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    padding: 8px;
+    cursor: pointer; /* ボタン/シークバー以外の領域クリックで再生/一時停止 */
+  }
+  .item:hover .audio-player { border-color: #555; }
+  /* 再生中の音声カード: 選択状態(青)と紛れない色(緑)で、離れていても分かるようにする。
+     枠色 + box-shadow だけだと、選択時の outline(2px, offset -1px、.item.selected .audio-player)が
+     枠の上に重なって見た目を青一色にしてしまい、選択中は再生中かどうか判別できなくなる(実害:
+     UI チェックで発見)。outline はカードの外周に描かれるだけで内側の背景までは覆わないため、
+     背景そのものに緑みを足し、再生ボタンの色も変えて、選択の青と同時でも判別できる要素を
+     border/outline 以外にも持たせる */
+  .item .audio-player.playing {
+    border-color: #3aa15a;
+    box-shadow: 0 0 0 2px rgba(58, 161, 90, 0.5);
+    background: rgba(58, 161, 90, 0.22);
+  }
+  .item .audio-player audio { display: none; }
+
+  /* ---- player controls(音声カードとライトボックスの動画で共用) ----
+     再生/一時停止ボタン・シークバー・経過/総時間。組み立ては createPlayerControls() */
+  .player-controls {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 6px;
+  }
+  .player-controls.playing .player-playpause {
+    background: #3aa15a;
+    border-color: #2f8a4c;
+    color: #fff;
+  }
+  .player-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .player-playpause {
+    flex: 0 0 auto;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: #2a2a2a;
+    color: var(--fg);
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+  }
+  .player-playpause:hover { background: #333; }
+  .player-controls.playing .player-playpause:hover { background: #349150; }
+  .player-seek {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .player-time {
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+    color: var(--fg-dim);
+  }
+
+  /* ---- selection checkbox と音声カード操作 UI の重なり回避 ----
+     .item-check は item 基準で top/left 6px・22x22(x/y とも 6〜28px を専有)。音声カードの
+     再生ボタンは box の padding(8px)ぶん内側の x/y 9px 付近から始まるため、選択モード中は
+     ボタンの大部分がチェックボックスの下に隠れていた(実害: fix3-01-playing-selected-closeup.png)。
+     チェックボックスの位置は画像・動画とも揃えている(前回 UI チェック評価済み)ため動かさず、
+     音声カード側の操作行(再生ボタン+シークバー)と時間表示を右にずらして避ける。
+     カード高さは AUDIO_CARD_HEIGHT で固定なので縦方向の余白では対応できず、横方向のみで解決する
+     (時間表示は元々チェックボックスの下端(28px)より下にあり縦方向では重ならないが、操作行と
+     揃えて見た目を統一するために同じ分だけ揃えてずらす) */
+  body.selecting .item .player-row,
+  body.selecting .item .player-time {
+    padding-left: 24px;
+  }
+  /* 読み込めなかったカード(.item-ph)の文言も同じ理由でチェックボックスに先頭が隠れていた
+     (「Can't play」が「t play」と読める)。チェックボックスの右端 28px + 余白ぶん文字を右に寄せる */
+  body.selecting .item .item-ph {
+    padding-left: 34px;
+  }
+
+  .item-ph {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid var(--error);
+    color: var(--error);
+    font-size: 11px;
+    padding: 8px;
+    word-break: break-all;
+    background: rgba(120, 40, 40, 0.15);
+  }
+
+  .item-label {
+    position: absolute;
+    left: 0;
+    top: 100%;
+    margin-top: 3px;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    color: var(--canvas-fg-dim, var(--fg-dim));
+    pointer-events: none;
+  }
+
+  /* ---------------- empty state / load error state ---------------- */
+  /* #load-error-state は「board を渡さず開いた(本当に空)」の #empty-state とは別の見た目にし、
+     読み込みに失敗したことが分かるようにする(見出しをエラー色にするだけで、他は共通スタイル) */
+  #empty-state, #load-error-state {
+    display: none;
+    height: 100vh;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 14px;
+    text-align: center;
+    padding: 20px;
+  }
+  #empty-state h1, #load-error-state h1 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--fg);
+    margin: 0;
+  }
+  #load-error-state h1 { color: var(--error); }
+  #empty-state pre {
+    background: #1e1e1e;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 16px;
+    max-width: 900px;
+    overflow-x: auto;
+    text-align: left;
+    font-size: 11px;
+    line-height: 1.6;
+    color: #b8d8b8;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  #empty-state p, #load-error-state p {
+    color: var(--fg-dim);
+    max-width: 640px;
+    line-height: 1.6;
+  }
+
+  /* ---------------- lightbox ---------------- */
+  #lightbox {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 200000;
+  }
+  #lightbox.active { display: block; }
+
+  #lightbox-backdrop {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+  }
+
+  #lightbox-img,
+  #lightbox-video {
+    position: absolute;
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: grab;
+    image-rendering: auto;
+  }
+  #lightbox-img.grabbing,
+  #lightbox-video.grabbing { cursor: grabbing; }
+  #lightbox-img.pixelated,
+  #lightbox-video.pixelated { image-rendering: pixelated; }
+
+  #lightbox-error {
+    display: none;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: var(--error);
+    font-size: 13px;
+    max-width: 80vw;
+    text-align: center;
+    word-break: break-all;
+  }
+
+  #lightbox-info {
+    position: absolute;
+    left: 12px;
+    bottom: 10px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11px;
+    color: #ddd;
+    background: rgba(0, 0, 0, 0.55);
+    padding: 4px 8px;
+    border-radius: 4px;
+    pointer-events: none;
+    white-space: pre;
+  }
+
+  #lightbox-close {
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    color: #ddd;
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid #444;
+    border-radius: 4px;
+    width: 28px;
+    height: 28px;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  #lightbox-close:hover { background: rgba(40, 40, 40, 0.85); }
+
+  /* ---- lightbox sound toggle ----
+     以前は #lightbox-info の文字列末尾に小さい絵文字(🔊/🔇)を混ぜていたが、11px の
+     monospace 内では判別しづらかった。独立したボタンにして、アイコンは本文と同じくらいの
+     文字サイズ・ラベル併記・ミュート時は枠色も変える(色だけに頼らない三重の見分け方) */
+  #lightbox-sound-toggle {
+    display: none; /* isVideo のときだけ JS で flex にする */
+    position: absolute;
+    right: 12px;
+    bottom: 10px;
+    align-items: center;
+    gap: 6px;
+    color: #ddd;
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 6px 10px;
+    font: inherit;
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  #lightbox-sound-toggle:hover { background: rgba(40, 40, 40, 0.85); }
+  #lightbox-sound-toggle .lightbox-sound-icon { font-size: 16px; line-height: 1; }
+  #lightbox-sound-toggle.muted { color: #f0a0a0; border-color: #a04040; }
+
+  /* ---- lightbox video controls ----
+     ブラウザ標準の controls 属性は使わない(動画本体はドラッグ移動・ホイール拡大を受けていて、
+     標準の操作 UI とぶつかるため)。操作 UI は音声カードと同じ部品(.player-controls)で、
+     下端の #lightbox-info・#lightbox-sound-toggle の行より上に置く。#lightbox-backdrop の外に
+     あるので、ここでのクリックはライトボックスを閉じず、mousedown も動画のドラッグにならない。
+     ホイールは JS で止めて拡大させない */
+  #lightbox-controls {
+    display: none; /* 動画を表示しているときだけ JS で flex にする */
+    position: absolute;
+    left: 50%;
+    bottom: 48px;
+    transform: translateX(-50%);
+    width: min(720px, calc(100vw - 24px));
+    box-sizing: border-box;
+    background: rgba(0, 0, 0, 0.75);
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 8px 10px;
+  }
+  /* 動画の上に重なるので、時間表示は他のライトボックス表示(#lightbox-info 等)と同じ明るさにする */
+  #lightbox-controls .player-time { color: #ddd; }
+</style>
+</head>
+<body>
+
+  <div id="header">
+    <span id="image-count"></span>
+    <span id="grid-size-control">
+      <label for="grid-size-slider" data-i18n="sizeLabel"></label>
+      <input type="range" id="grid-size-slider" min="120" max="640" step="10" value="220">
+      <span id="grid-size-label">220px</span>
+    </span>
+    <button id="bg-toggle" type="button"></button>
+    <button id="select-toggle" class="hdr-btn" type="button" data-i18n="select"></button>
+    <button id="select-all" class="hdr-btn select-only" type="button" data-i18n="selectAll"></button>
+    <button id="select-clear" class="hdr-btn select-only" type="button" data-i18n="selectClear"></button>
+    <button id="copy-selected" class="hdr-btn select-only" type="button" disabled></button>
+    <span id="copy-status" class="select-only" style="color: var(--fg-dim); font-size: 11px;"></span>
+    <span id="shortcuts-hint">
+      <span class="hint-default" data-hint="hintDefault"></span>
+      <span class="hint-select" data-hint="hintSelect"></span>
+    </span>
+  </div>
+
+  <div id="canvas"></div>
+
+  <div id="empty-state">
+    <h1 data-i18n="emptyTitle"></h1>
+    <p data-i18n="emptyBody"></p>
+    <pre data-i18n="emptyUsage"></pre>
+  </div>
+
+  <div id="load-error-state">
+    <h1 data-i18n="loadErrorTitle"></h1>
+    <p data-i18n="loadErrorBody"></p>
+  </div>
+
+  <div id="lightbox">
+    <div id="lightbox-backdrop">
+      <img id="lightbox-img" src="" alt="" draggable="false">
+      <video id="lightbox-video" loop playsinline></video>
+      <div id="lightbox-error"></div>
+    </div>
+    <div id="lightbox-info"></div>
+    <div id="lightbox-controls" class="player-controls"></div>
+    <button id="lightbox-sound-toggle" type="button" data-i18n-title="soundToggleTitle"></button>
+    <button id="lightbox-close" type="button" data-i18n-title="closeTitle">&times;</button>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------------- constants ----------------
+  var MIN_ZOOM = 0.05;
+  var MAX_ZOOM = 32;
+  var FIT_MARGIN = 40; // px margin kept around the image when fitting
+  var REPLACE_POLL_MS = 500; // 同名 target への差し替え要求を見に行く間隔
+  var RESIZE_DEBOUNCE_MS = 200; // window resize 連続発火(リサイズ中に大量に飛ぶ)を間引く間隔
+  var BG_STATES = ["dark", "checker", "white"];
+
+  // ---------------- 表示言語 ----------------
+  // 画面の文字列はすべてここから引く。言語は moodboard.ts が URL の lang に入れる(macOS の言語設定・
+  // --lang・MOODBOARD_LANG から決める。決め方の正は README.md の「Language」節)。lang が無い
+  // (http 経由の検証ページ)ときは navigator.language で決める。ja 以外は en
+  var STRINGS = {
+    en: {
+      background: function (state) { return "Background: " + { dark: "Dark", checker: "Checker", white: "White" }[state]; },
+      itemCount: function (n) { return n + (n === 1 ? " item" : " items"); },
+      sizeLabel: "Size",
+      select: "Select",
+      selecting: "Selecting",
+      selectAll: "Select all",
+      selectClear: "Clear",
+      copy: function (n) { return "Copy (" + n + ")"; },
+      copied: function (n) { return "Copied " + n; },
+      copyFailed: "Copy failed",
+      hintDefault: ["wheel=size", "drag=move", "click=open", "r=re-layout", "b=background", "s=select", "+/-=base size", "⌘W=close window", "|", "lightbox: 0=fit", "1=100%", "2=200%", "←/→=prev/next", "space=play/pause", "m=sound", "Esc=close"],
+      hintSelect: ["click=select", "⌘A=select all", "⌘C=copy", "s or Esc=exit", "⌘W=close window"],
+      emptyTitle: "moodboard — nothing to show",
+      emptyBody: "Open this page with the moodboard command. It takes images, videos (mov/webm/mp4) and audio (wav/mp3/m4a/aac/flac/ogg/opus).",
+      emptyUsage: "moodboard [--target <name>] <paths...>\nmoodboard [--target <name>] --json <board.json>\n\nNote: open \"file://...?query\" does not work because macOS drops the query.\nSee README.md for how to open it",
+      loadErrorTitle: "moodboard — failed to load the files to show",
+      loadErrorBody: "An error occurred while loading the board (a timeout, a conflict in the state files, etc.). Close this window and run the moodboard command again.",
+      soundToggleTitle: "Sound on/off (m)",
+      closeTitle: "Close (Esc)",
+      cannotPlay: function (name) { return "Can't play: " + name; },
+      loadFailed: function (path) { return "Failed to load: " + path; },
+      playPause: "Play / pause",
+      seek: "Seek",
+      soundOn: "Sound on",
+      muted: "Muted"
+    },
+    ja: {
+      background: function (state) { return "背景: " + { dark: "ダーク", checker: "市松", white: "白" }[state]; },
+      itemCount: function (n) { return n + " 件"; },
+      sizeLabel: "サイズ",
+      select: "選択",
+      selecting: "選択中",
+      selectAll: "全選択",
+      selectClear: "解除",
+      copy: function (n) { return "コピー (" + n + ")"; },
+      copied: function (n) { return n + " 件コピー"; },
+      copyFailed: "コピー失敗",
+      hintDefault: ["wheel=サイズ", "drag=移動", "click=拡大表示", "r=再整列", "b=背景", "s=選択", "+/-=基準サイズ", "⌘W=窓を閉じる", "|", "lightbox: 0=fit", "1=100%", "2=200%", "←/→=前後", "space=再生/停止", "m=音", "Esc=閉じる"],
+      hintSelect: ["クリック=選択", "⌘A=全選択", "⌘C=コピー", "s か Esc=抜ける", "⌘W=窓を閉じる"],
+      emptyTitle: "moodboard — 表示するアイテムがありません",
+      emptyBody: "moodboard コマンド経由で開いてください。画像・動画(mov/webm/mp4)・音声(wav/mp3/m4a/aac/flac/ogg/opus)を渡せます。",
+      emptyUsage: "moodboard [--target <名前>] <パス...>\nmoodboard [--target <名前>] --json <board.json>\n\n注意: open \"file://...?クエリ\" は macOS がクエリを落とすので不可。\n手順の正は README.md",
+      loadErrorTitle: "moodboard — 表示データの読み込みに失敗しました",
+      loadErrorBody: "board の読み込み中にエラーが発生しました(タイムアウトや状態ファイルの競合など)。このウィンドウを閉じ、moodboard コマンドをもう一度実行してください。",
+      soundToggleTitle: "音声のオン/オフ切り替え (m)",
+      closeTitle: "閉じる (Esc)",
+      cannotPlay: function (name) { return "再生不可: " + name; },
+      loadFailed: function (path) { return "読み込めません: " + path; },
+      playPause: "再生 / 一時停止",
+      seek: "シーク",
+      soundOn: "音あり",
+      muted: "ミュート中"
+    }
+  };
+  var LANG = (function () {
+    var requested = new URLSearchParams(window.location.search).get("lang") || navigator.language || "";
+    return requested.toLowerCase().indexOf("ja") === 0 ? "ja" : "en";
+  })();
+  var S = STRINGS[LANG];
+  // 音声カードは画像・動画と違って「自然な視覚サイズ」を持たない(mediaWidth は常に0)。
+  // 高さは操作 UI(ボタン+シークバー行・時間表示・上下 padding)がちょうど収まる固定値にし、
+  // 基準サイズ・ホイールでは幅だけが変わるようにする(高さ比例だと空白の箱になるため)。
+  // 実測(padding 8px×2 + ボタン行26px + gap6px + 時間表示行)に基づく値
+  var AUDIO_CARD_HEIGHT = 64;
+  // ---------------- shared helpers ----------------
+  function clamp(v, lo, hi) {
+    return Math.min(hi, Math.max(lo, v));
+  }
+
+  function basename(path) {
+    var parts = path.split("/");
+    return parts[parts.length - 1] || path;
+  }
+
+  function toImgSrc(absPath) {
+    var encoded = absPath.split("/").map(encodeURIComponent).join("/");
+    // http(s) 経由(ファイルシステムルートを root にした検証用ローカルサーバ)では
+    // file:// サブリソースがブロックされるため、サーバルート相対で参照する
+    if (window.location.protocol === "file:") return "file://" + encoded;
+    return encoded;
+  }
+
+  function devicePixelRatioSafe() {
+    return window.devicePixelRatio || 1;
+  }
+
+  function isVideoPath(path) {
+    return /\.(mov|webm|mp4)$/i.test(path);
+  }
+
+  function isAudioPath(path) {
+    return /\.(wav|mp3|m4a|aac|flac|ogg|opus)$/i.test(path);
+  }
+
+  // <img> の naturalWidth/naturalHeight と <video> の videoWidth/videoHeight を吸収する。
+  // 音声には視覚的な寸法が無いので 0 を返す
+  function mediaWidth(media) {
+    if (!media) return 0;
+    if (media.tagName === "VIDEO") return media.videoWidth;
+    if (media.tagName === "IMG") return media.naturalWidth;
+    return 0;
+  }
+
+  function mediaHeight(media) {
+    if (!media) return 0;
+    if (media.tagName === "VIDEO") return media.videoHeight;
+    if (media.tagName === "IMG") return media.naturalHeight;
+    return 0;
+  }
+
+  function formatAudioTime(seconds) {
+    if (!isFinite(seconds) || seconds < 0) seconds = 0;
+    var m = Math.floor(seconds / 60);
+    var s = Math.floor(seconds % 60);
+    return m + ":" + (s < 10 ? "0" : "") + s;
+  }
+
+  // ---------------- state ----------------
+  var sections = [];    // [{ title, note, entries: [{path,label}], cards: [item...], headingEl }]
+  var items = [];       // 全アイテムのフラット配列(lightbox 送り・選択コピーの順序はこの配列基準)
+  var failedPaths = [];
+  var bgIndex = 0;
+
+  var lightboxState = {
+    index: 0,
+    isVideo: false,
+    videoError: false, // ライトボックスの動画が再生不可(操作バーを出さない)
+    soundOn: true,   // ライトボックスの動画は既定で音あり(m で切替)。ライトテーブルは常にミュート
+    zoom: 1,
+    posX: 0,
+    posY: 0,
+    naturalW: 0,
+    naturalH: 0,
+    dragging: false,
+    didDrag: false,
+    dragStartX: 0,
+    dragStartY: 0,
+    dragOrigX: 0,
+    dragOrigY: 0
+  };
+
+  // ---------------- DOM refs ----------------
+  var headerEl = document.getElementById("header");
+  var canvasEl = document.getElementById("canvas");
+  var emptyStateEl = document.getElementById("empty-state");
+  var loadErrorStateEl = document.getElementById("load-error-state");
+  var imageCountEl = document.getElementById("image-count");
+  var gridSizeSlider = document.getElementById("grid-size-slider");
+  var gridSizeLabel = document.getElementById("grid-size-label");
+  var bgToggleBtn = document.getElementById("bg-toggle");
+  var selectToggleBtn = document.getElementById("select-toggle");
+  var selectAllBtn = document.getElementById("select-all");
+  var selectClearBtn = document.getElementById("select-clear");
+  var copySelectedBtn = document.getElementById("copy-selected");
+  var copyStatusEl = document.getElementById("copy-status");
+
+  var lightboxEl = document.getElementById("lightbox");
+  var lightboxBackdrop = document.getElementById("lightbox-backdrop");
+  var lightboxImg = document.getElementById("lightbox-img");
+  var lightboxVideo = document.getElementById("lightbox-video");
+  var lightboxErrorEl = document.getElementById("lightbox-error");
+  var lightboxInfoEl = document.getElementById("lightbox-info");
+  var lightboxSoundToggleBtn = document.getElementById("lightbox-sound-toggle");
+  var lightboxControlsEl = document.getElementById("lightbox-controls");
+  var lightboxCloseBtn = document.getElementById("lightbox-close");
+
+  // ---------------- base size ----------------
+  function setBaseSize(px) {
+    var v = clamp(px, 120, 640);
+    gridSizeSlider.value = String(v);
+    gridSizeLabel.textContent = v + "px";
+  }
+
+  function adjustBaseSize(delta) {
+    setBaseSize(parseInt(gridSizeSlider.value, 10) + delta);
+    layoutItems();
+  }
+
+  gridSizeSlider.addEventListener("input", function () {
+    setBaseSize(parseInt(gridSizeSlider.value, 10));
+    layoutItems();
+  });
+
+  // ---------------- background cycle ----------------
+  function cycleBackground() {
+    bgIndex = (bgIndex + 1) % BG_STATES.length;
+    var state = BG_STATES[bgIndex];
+    document.documentElement.setAttribute("data-bg", state);
+    bgToggleBtn.textContent = S.background(state);
+  }
+
+  bgToggleBtn.addEventListener("click", cycleBackground);
+
+  // ---------------- light table(自由配置キャンバス) ----------------
+  // 画像はクリッピングなしでキャンバス上を自由に移動・自由なサイズにできる。
+  var MIN_ITEM_WIDTH = 40;
+  var LAYOUT_GAP = 14;
+  var LABEL_SPACE = 22;
+  var itemDrag = null;           // 進行中のドラッグ
+  var suppressItemClick = false; // ドラッグ直後の click でライトボックス/再生を発火しない
+  var zCounter = 1;
+  // ユーザーがドラッグ移動 or wheel リサイズでどれか1つでもカードを手動配置したら true。
+  // window resize での自動再整列(下記 "window resize" 節)はこれが false の間だけ行う。
+  // 手動配置後は自動再整列で崩さず、r キーでの明示的な再整列だけがそれをリセットする
+  // (layoutItems() 自体の末尾でリセットする。理由: 手動配置が1つでもあれば全体を勝手に
+  // 組み直さない方が安全 — どのカードを崩していいかの部分判定はせず、崩すなら r で全部まとめて)
+  var manualLayoutChanged = false;
+
+  // ---------------- selection ----------------
+  var selectMode = false;
+  var selected = new Set(); // item.index の集合
+  var copyStatusTimer = null;
+
+  function setSelectMode(on) {
+    selectMode = !!on;
+    document.body.classList.toggle("selecting", selectMode);
+    selectToggleBtn.classList.toggle("active", selectMode);
+    selectToggleBtn.textContent = selectMode ? S.selecting : S.select;
+    if (!selectMode) {
+      selected.clear();
+      items.forEach(function (it) { it.el.classList.remove("selected"); });
+    }
+    updateCopyButton();
+  }
+
+  function toggleItemSelected(item) {
+    if (selected.has(item.index)) {
+      selected.delete(item.index);
+      item.el.classList.remove("selected");
+    } else {
+      selected.add(item.index);
+      item.el.classList.add("selected");
+    }
+    updateCopyButton();
+  }
+
+  function selectAll() {
+    items.forEach(function (it) {
+      selected.add(it.index);
+      it.el.classList.add("selected");
+    });
+    updateCopyButton();
+  }
+
+  function selectClear() {
+    selected.clear();
+    items.forEach(function (it) { it.el.classList.remove("selected"); });
+    updateCopyButton();
+  }
+
+  function updateCopyButton() {
+    var n = selected.size;
+    copySelectedBtn.textContent = S.copy(n);
+    copySelectedBtn.disabled = n === 0;
+  }
+
+  function flashCopyStatus(msg) {
+    copyStatusEl.textContent = msg;
+    if (copyStatusTimer) clearTimeout(copyStatusTimer);
+    copyStatusTimer = setTimeout(function () {
+      copyStatusEl.textContent = "";
+      copyStatusTimer = null;
+    }, 1800);
+  }
+
+  function copySelectedPaths() {
+    if (selected.size === 0) return;
+    // 表示順(items の元順)で並べる
+    var paths = [];
+    items.forEach(function (it, i) {
+      if (selected.has(i)) paths.push(it.path);
+    });
+    var text = paths.join("\n");
+    var done = function () { flashCopyStatus(S.copied(paths.length)); };
+    var fail = function () {
+      // フォールバック: 隠し textarea 経由の execCommand
+      try {
+        var ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        var ok = document.execCommand("copy");
+        document.body.removeChild(ta);
+        if (ok) done(); else flashCopyStatus(S.copyFailed);
+      } catch (_) {
+        flashCopyStatus(S.copyFailed);
+      }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(fail);
+    } else {
+      fail();
+    }
+  }
+
+  selectToggleBtn.addEventListener("click", function () { setSelectMode(!selectMode); });
+  selectAllBtn.addEventListener("click", selectAll);
+  selectClearBtn.addEventListener("click", selectClear);
+  copySelectedBtn.addEventListener("click", copySelectedPaths);
+
+  // ---------------- audio playback ----------------
+  // 同時に鳴るのは1本だけ: どれかを再生したら他の音声は一時停止する。
+  // exceptItem に null を渡すと全ての音声カードを止める(ライトボックスで動画の音を出す前などに使う)
+  function pauseAllAudioExcept(exceptItem) {
+    items.forEach(function (it) {
+      if (it.kind === "audio" && it !== exceptItem && it.media && !it.media.paused) {
+        it.media.pause();
+      }
+    });
+  }
+
+  function toggleAudioPlayback(item) {
+    if (item.broken || !item.media) return;
+    if (item.media.paused) {
+      pauseAllAudioExcept(item);
+      var playPromise = item.media.play();
+      if (playPromise && playPromise.catch) playPromise.catch(function () {});
+    } else {
+      item.media.pause();
+    }
+  }
+
+  // 再生/一時停止ボタン・シークバー・経過/総時間の操作 UI を root(.player-controls)に組み立て、
+  // media(<audio>/<video>)に結びつける。音声カードとライトボックスの動画で共用する。
+  // 再生中は root に .playing を付ける(再生ボタンが緑になる)。
+  // opts.onToggle(): 再生/一時停止ボタンが押されたとき
+  // ボタン・シークバーの操作は選択モード中も再生/シークに使う(伝播を止めるので選択トグルにはならない。
+  // 選択モード中はカードのそれ以外の場所のクリックが選択トグル)
+  function createPlayerControls(media, root, opts) {
+    var playBtn = document.createElement("button");
+    playBtn.type = "button";
+    playBtn.className = "player-playpause";
+    playBtn.textContent = "▶";
+    playBtn.title = S.playPause;
+
+    var seek = document.createElement("input");
+    seek.type = "range";
+    seek.className = "player-seek";
+    seek.min = "0";
+    seek.max = "1000";
+    seek.value = "0";
+    seek.disabled = true; // duration が分かるまでは動かせない
+    seek.title = S.seek;
+
+    var timeEl = document.createElement("span");
+    timeEl.className = "player-time";
+    timeEl.textContent = "0:00 / 0:00";
+
+    var row = document.createElement("div");
+    row.className = "player-row";
+    row.appendChild(playBtn);
+    row.appendChild(seek);
+    root.appendChild(row);
+    root.appendChild(timeEl);
+
+    var seeking = false; // シークバーをドラッグ中か(timeupdate と競合させない)
+
+    function refresh() {
+      var duration = isFinite(media.duration) ? media.duration : 0;
+      if (duration > 0) {
+        seek.disabled = false;
+        if (!seeking) seek.value = String(Math.round((media.currentTime / duration) * 1000));
+      } else {
+        // src を外した直後(ライトボックスで次の動画へ送ったとき等)は前の位置を残さない
+        seek.disabled = true;
+        seek.value = "0";
+      }
+      timeEl.textContent = formatAudioTime(media.currentTime) + " / " + formatAudioTime(duration);
+    }
+
+    function syncPlayState() {
+      playBtn.textContent = media.paused ? "▶" : "❚❚";
+      root.classList.toggle("playing", !media.paused);
+    }
+
+    // ボタン・シークバーの操作は、通常時は親(カードの drag 開始・クリック再生トグル)へ伝播させず
+    // 自分で再生/シークを行う
+    playBtn.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+    playBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      opts.onToggle();
+    });
+
+    seek.addEventListener("mousedown", function (e) {
+      e.stopPropagation();
+      seeking = true;
+    });
+    seek.addEventListener("click", function (e) {
+      e.stopPropagation();
+    });
+    seek.addEventListener("input", function () {
+      var duration = isFinite(media.duration) ? media.duration : 0;
+      if (duration <= 0) return;
+      media.currentTime = (Number(seek.value) / 1000) * duration;
+      timeEl.textContent = formatAudioTime(media.currentTime) + " / " + formatAudioTime(duration);
+    });
+    // シークし終えたらフォーカスを外す。INPUT にフォーカスが残るとキー操作(Esc・←/→・m 等)が
+    // onKeyDown で無視されたままになる。値を変えずに離した回は change が出ないので mouseup でも外す
+    seek.addEventListener("change", function () { seek.blur(); });
+    seek.addEventListener("mouseup", function () { seek.blur(); });
+    document.addEventListener("mouseup", function () { seeking = false; });
+
+    media.addEventListener("play", syncPlayState);
+    media.addEventListener("pause", syncPlayState);
+    media.addEventListener("ended", syncPlayState);
+    media.addEventListener("emptied", function () { syncPlayState(); refresh(); });
+    media.addEventListener("timeupdate", refresh);
+    media.addEventListener("durationchange", refresh);
+    media.addEventListener("loadedmetadata", refresh);
+  }
+
+  function itemHeight(item) {
+    // 音声カードは幅に関わらず固定高さ(操作 UI に合わせる)。画像・動画は従来どおり幅×aspect
+    return item.kind === "audio" ? AUDIO_CARD_HEIGHT : item.w * item.aspect;
+  }
+
+  function applyItemStyle(item) {
+    item.el.style.left = item.x + "px";
+    item.el.style.top = item.y + "px";
+    item.el.style.width = item.w + "px";
+    if (item.ph) item.ph.style.height = itemHeight(item) + "px";
+    if (item.audioBox) item.audioBox.style.height = itemHeight(item) + "px";
+    if (item.media) {
+      var mw = mediaWidth(item.media);
+      if (mw) {
+        // ライトボックスと同じ「物理ピクセル基準 200% 以上で pixelated」
+        var physZoom = item.w * devicePixelRatioSafe() / mw;
+        item.media.classList.toggle("pixelated", physZoom >= 2);
+      }
+    }
+  }
+
+  // 初期整列。r キー・基準サイズ変更でも呼ぶ。以降の移動・リサイズは自由。
+  // セクションごとに「見出し(あれば)→そのカード群」を上から積む
+  function layoutItems() {
+    var base = parseInt(gridSizeSlider.value, 10);
+    var maxW = Math.max(canvasEl.clientWidth, base + LAYOUT_GAP * 2);
+    var headingWidth = maxW - LAYOUT_GAP * 2;
+    var y = LAYOUT_GAP;
+    sections.forEach(function (section) {
+      if (section.headingEl) {
+        section.headingEl.style.left = LAYOUT_GAP + "px";
+        section.headingEl.style.top = y + "px";
+        section.headingEl.style.width = headingWidth + "px";
+        y += section.headingEl.offsetHeight + LAYOUT_GAP;
+      }
+      var x = LAYOUT_GAP, rowH = 0;
+      section.cards.forEach(function (item) {
+        item.w = base;
+        var h = itemHeight(item) + LABEL_SPACE;
+        if (x + base > maxW - LAYOUT_GAP && x > LAYOUT_GAP) {
+          x = LAYOUT_GAP;
+          y += rowH + LAYOUT_GAP;
+          rowH = 0;
+        }
+        item.x = x;
+        item.y = y;
+        rowH = Math.max(rowH, h);
+        x += base + LAYOUT_GAP;
+        applyItemStyle(item);
+      });
+      if (section.cards.length > 0) y += rowH + LAYOUT_GAP;
+    });
+    canvasEl.style.minHeight = y + "px";
+    // 呼ばれた時点で全カードがグリッド配置に戻るので、手動配置フラグもここでリセットする
+    manualLayoutChanged = false;
+  }
+
+  function attachItemInteractions(item) {
+    item.el.addEventListener("wheel", function (e) {
+      // 音声カードは wheel でリサイズしない(ページのスクロール中にカーソルが乗って思わず伸び縮みするため。
+      // 幅は基準サイズのスライダーで変わる)。preventDefault しないのでページはそのままスクロールする
+      if (item.kind === "audio") return;
+      e.preventDefault();
+      var cRect = canvasEl.getBoundingClientRect();
+      var px = e.clientX - cRect.left;
+      var py = e.clientY - cRect.top;
+      var factor = Math.exp(-e.deltaY * 0.0015);
+      var mw = mediaWidth(item.media);
+      var maxW = mw ? mw * MAX_ZOOM / devicePixelRatioSafe() : 4096;
+      var newW = clamp(item.w * factor, MIN_ITEM_WIDTH, maxW);
+      var ratio = newW / item.w;
+      // カーソル位置を不動点にリサイズ
+      item.x = px - (px - item.x) * ratio;
+      item.y = py - (py - item.y) * ratio;
+      item.w = newW;
+      applyItemStyle(item);
+      manualLayoutChanged = true; // 手動リサイズ済み: window resize での自動再整列を抑止する
+    }, { passive: false });
+
+    item.el.addEventListener("mousedown", function (e) {
+      if (e.button !== 0) return;
+      if (selectMode) return; // 選択モード中はドラッグしない(click でトグル)
+      e.preventDefault();
+      item.el.style.zIndex = String(++zCounter); // 掴んだものを最前面へ
+      itemDrag = {
+        item: item,
+        startX: e.clientX,
+        startY: e.clientY,
+        origX: item.x,
+        origY: item.y,
+        moved: false
+      };
+      item.el.classList.add("grabbing");
+    });
+
+    item.el.addEventListener("click", function () {
+      if (suppressItemClick) {
+        suppressItemClick = false;
+        return;
+      }
+      if (selectMode) {
+        toggleItemSelected(item);
+        return;
+      }
+      if (item.broken) return;
+      if (item.kind === "audio") {
+        toggleAudioPlayback(item);
+      } else {
+        openLightbox(item.index);
+      }
+    });
+  }
+
+  // ドラッグ終了が item 外で起きても、次の押下で必ず抑制フラグを掃除する
+  document.addEventListener("mousedown", function () {
+    suppressItemClick = false;
+  }, true);
+
+  document.addEventListener("mousemove", function (e) {
+    if (!itemDrag) return;
+    var dx = e.clientX - itemDrag.startX;
+    var dy = e.clientY - itemDrag.startY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) itemDrag.moved = true;
+    itemDrag.item.x = itemDrag.origX + dx;
+    itemDrag.item.y = itemDrag.origY + dy;
+    applyItemStyle(itemDrag.item);
+  });
+
+  document.addEventListener("mouseup", function () {
+    if (!itemDrag) return;
+    itemDrag.item.el.classList.remove("grabbing");
+    if (itemDrag.moved) {
+      suppressItemClick = true;
+      manualLayoutChanged = true; // 手動ドラッグ移動済み: window resize での自動再整列を抑止する
+    }
+    itemDrag = null;
+  });
+
+  // ---------------- window resize(自動再整列) ----------------
+  // 窓の幅を変えてもカードは初期座標のまま動かず、右側が画面外にはみ出す不具合の対策。
+  // resize は連続で大量に発火するため debounce し、収まってから1回だけ layoutItems() を呼ぶ。
+  // ただしユーザーがドラッグ/wheel で1つでも手動配置していたら(manualLayoutChanged)、
+  // それを勝手に崩さないよう自動再整列はスキップする(明示的に崩したいときは r キー)。
+  var resizeDebounceTimer = null;
+  window.addEventListener("resize", function () {
+    if (resizeDebounceTimer) clearTimeout(resizeDebounceTimer);
+    resizeDebounceTimer = setTimeout(function () {
+      resizeDebounceTimer = null;
+      if (!manualLayoutChanged) layoutItems();
+    }, RESIZE_DEBOUNCE_MS);
+  });
+
+  // ---------------- canvas rendering ----------------
+  function createSectionHeading(section) {
+    var el = document.createElement("div");
+    el.className = "section-heading";
+    if (section.title) {
+      var title = document.createElement("div");
+      title.className = "section-title";
+      title.textContent = section.title;
+      el.appendChild(title);
+    }
+    if (section.note) {
+      var note = document.createElement("div");
+      note.className = "section-note";
+      note.textContent = section.note; // white-space:pre-wrap で改行保持
+      el.appendChild(note);
+    }
+    return el;
+  }
+
+  // 画像/動画のカード内容を組み立てる(共通の label/check は createItem 側で付ける)
+  function buildMediaCard(item, el, path, isVideo, label, onSettled) {
+    var media = document.createElement(isVideo ? "video" : "img");
+    if (isVideo) {
+      media.autoplay = true;
+      media.muted = true;
+      media.loop = true;
+      media.playsInline = true;
+      media.disablePictureInPicture = true;
+    } else {
+      media.alt = basename(path);
+    }
+    // ネイティブのドラッグ(ゴースト)を殺して移動を効かせる
+    media.draggable = false;
+    media.addEventListener("dragstart", function (e) { e.preventDefault(); });
+
+    item.media = media;
+
+    media.addEventListener(isVideo ? "loadedmetadata" : "load", function () {
+      var w = mediaWidth(media);
+      var h = mediaHeight(media);
+      item.aspect = (w ? h / w : 0) || 1;
+      onSettled();
+    });
+
+    media.addEventListener("error", function () {
+      failedPaths.push(path);
+      item.broken = true;
+      item.aspect = 0.5;
+      el.classList.add("error");
+      media.remove();
+      item.media = null;
+      var ph = document.createElement("div");
+      ph.className = "item-ph";
+      ph.textContent = isVideo ? S.cannotPlay(basename(path)) : S.loadFailed(path);
+      item.ph = ph;
+      el.insertBefore(ph, label);
+      onSettled();
+    });
+
+    media.src = toImgSrc(path);
+    el.appendChild(media);
+  }
+
+  // 音声カードを組み立てる: 再生/一時停止ボタン・シークバー・経過/総時間を持つプレイヤー
+  function buildAudioCard(item, el, path, label, onSettled) {
+    var box = document.createElement("div");
+    box.className = "audio-player player-controls";
+
+    var audio = document.createElement("audio");
+    audio.preload = "metadata";
+    audio.addEventListener("dragstart", function (e) { e.preventDefault(); });
+
+    box.appendChild(audio);
+    item.media = audio;
+    item.audioBox = box;
+
+    createPlayerControls(audio, box, {
+      onToggle: function () { toggleAudioPlayback(item); }
+    });
+
+    audio.addEventListener("loadedmetadata", onSettled);
+
+    audio.addEventListener("error", function () {
+      failedPaths.push(path);
+      item.broken = true;
+      // aspect は使わない(itemHeight() は audio を固定高さで返すため、broken でも AUDIO_CARD_HEIGHT のまま)
+      el.classList.add("error");
+      box.remove();
+      item.media = null;
+      item.audioBox = null;
+      var ph = document.createElement("div");
+      ph.className = "item-ph";
+      ph.textContent = S.cannotPlay(basename(path));
+      item.ph = ph;
+      el.insertBefore(ph, label);
+      onSettled();
+    });
+
+    audio.src = toImgSrc(path);
+    el.appendChild(box);
+  }
+
+  function createItem(entry, index, onSettled) {
+    var path = entry.path;
+    var el = document.createElement("div");
+    el.className = "item";
+    // ラベルを指定していれば「ラベル\n絶対パス」、無指定ならパスだけ(表示中の basename は
+    // path に含まれているため、無指定時にわざわざ重ねて出す意味が無い)
+    el.title = entry.label ? entry.label + "\n" + path : path;
+
+    var kind = isAudioPath(path) ? "audio" : (isVideoPath(path) ? "video" : "image");
+
+    var item = {
+      el: el,
+      media: null,
+      audioBox: null,
+      ph: null,
+      kind: kind,
+      path: path,
+      index: index,
+      x: 0,
+      y: 0,
+      w: parseInt(gridSizeSlider.value, 10),
+      aspect: 1, // 音声は itemHeight() が固定値を返すため未使用。画像/動画は読み込み後に上書きされる
+      broken: false
+    };
+
+    var label = document.createElement("div");
+    label.className = "item-label";
+    label.textContent = entry.label || basename(path);
+
+    var check = document.createElement("div");
+    check.className = "item-check";
+    check.textContent = "✓"; // チェックマーク(選択時のみ濃色で見える)
+
+    if (kind === "audio") {
+      buildAudioCard(item, el, path, label, onSettled);
+    } else {
+      buildMediaCard(item, el, path, kind === "video", label, onSettled);
+    }
+
+    el.appendChild(label);
+    el.appendChild(check);
+    attachItemInteractions(item);
+    items.push(item);
+    return el;
+  }
+
+  // board({sections:[{title?,note?,items:[{path,label?}]}]}) をランタイムの sections/items に変換する
+  function loadBoard(board) {
+    sections = [];
+    items = [];
+    failedPaths = [];
+    var rawSections = board && Array.isArray(board.sections) ? board.sections : [];
+    sections = rawSections.map(function (raw) {
+      return {
+        title: raw && raw.title,
+        note: raw && raw.note,
+        entries: (raw && Array.isArray(raw.items)) ? raw.items : [],
+        cards: [],
+        headingEl: null
+      };
+    });
+  }
+
+  function renderCanvas() {
+    var totalItems = sections.reduce(function (sum, s) { return sum + s.entries.length; }, 0);
+    if (totalItems === 0) {
+      headerEl.style.display = "none";
+      canvasEl.style.display = "none";
+      emptyStateEl.style.display = "flex";
+      return;
+    }
+
+    // 画像・動画・音声が混在しても種別を問わない表記にする(「15 images」のまま音声を含むと
+    // 誤解を招くため)。CLI 側の opened 行(images=<n>)とは独立の表示なので、そちらは変えない
+    imageCountEl.textContent = S.itemCount(totalItems);
+
+    var pending = totalItems;
+    function settled() {
+      pending--;
+      if (pending === 0) {
+        layoutItems();
+        notifyLauncherReady();
+      }
+    }
+
+    var fragment = document.createDocumentFragment();
+    var flatIndex = 0;
+    sections.forEach(function (section) {
+      if (section.title || section.note) {
+        section.headingEl = createSectionHeading(section);
+        fragment.appendChild(section.headingEl);
+      }
+      section.entries.forEach(function (entry) {
+        var el = createItem(entry, flatIndex, settled);
+        section.cards.push(items[items.length - 1]);
+        fragment.appendChild(el);
+        flatIndex++;
+      });
+    });
+    canvasEl.appendChild(fragment);
+    layoutItems(); // 読み込み前の仮整列(aspect=1)。全アイテム settle 後に再整列される
+  }
+
+  // ---------------- lightbox: geometry ----------------
+  function computeFitZoom(naturalW, naturalH) {
+    var dpr = devicePixelRatioSafe();
+    var vw = Math.max(1, window.innerWidth - FIT_MARGIN * 2);
+    var vh = Math.max(1, window.innerHeight - FIT_MARGIN * 2);
+    var cssScale = Math.min(vw / naturalW, vh / naturalH);
+    return cssScale * dpr;
+  }
+
+  function centerImage() {
+    var dpr = devicePixelRatioSafe();
+    var w = lightboxState.naturalW * lightboxState.zoom / dpr;
+    var h = lightboxState.naturalH * lightboxState.zoom / dpr;
+    lightboxState.posX = (window.innerWidth - w) / 2;
+    lightboxState.posY = (window.innerHeight - h) / 2;
+  }
+
+  // 現在表示中(image/video のどちらか)のライトボックス要素
+  function activeLightboxMedia() {
+    return lightboxState.isVideo ? lightboxVideo : lightboxImg;
+  }
+
+  function renderLightboxTransform() {
+    var dpr = devicePixelRatioSafe();
+    var w = lightboxState.naturalW * lightboxState.zoom / dpr;
+    var h = lightboxState.naturalH * lightboxState.zoom / dpr;
+    var media = activeLightboxMedia();
+    media.style.width = w + "px";
+    media.style.height = h + "px";
+    media.style.left = lightboxState.posX + "px";
+    media.style.top = lightboxState.posY + "px";
+    media.classList.toggle("pixelated", lightboxState.zoom >= 2);
+    updateLightboxInfo();
+  }
+
+  function setFitZoom() {
+    if (!lightboxState.naturalW) return;
+    lightboxState.zoom = computeFitZoom(lightboxState.naturalW, lightboxState.naturalH);
+    centerImage();
+    renderLightboxTransform();
+  }
+
+  function setZoomCentered(z) {
+    if (!lightboxState.naturalW) return;
+    lightboxState.zoom = clamp(z, MIN_ZOOM, MAX_ZOOM);
+    centerImage();
+    renderLightboxTransform();
+  }
+
+  function applyZoomAtPoint(newZoomRaw, cx, cy) {
+    if (!lightboxState.naturalW) return;
+    var newZoom = clamp(newZoomRaw, MIN_ZOOM, MAX_ZOOM);
+    var dpr = devicePixelRatioSafe();
+    var oldW = lightboxState.naturalW * lightboxState.zoom / dpr;
+    var oldH = lightboxState.naturalH * lightboxState.zoom / dpr;
+    var fracX = (cx - lightboxState.posX) / oldW;
+    var fracY = (cy - lightboxState.posY) / oldH;
+    var newW = lightboxState.naturalW * newZoom / dpr;
+    var newH = lightboxState.naturalH * newZoom / dpr;
+    lightboxState.zoom = newZoom;
+    lightboxState.posX = cx - fracX * newW;
+    lightboxState.posY = cy - fracY * newH;
+    renderLightboxTransform();
+  }
+
+  function updateLightboxInfo() {
+    var item = items[lightboxState.index];
+    var dims = lightboxState.naturalW ? (lightboxState.naturalW + "×" + lightboxState.naturalH) : "…";
+    var pct = Math.round(lightboxState.zoom * 100);
+    lightboxInfoEl.textContent =
+      basename(item.path) + "  " + dims + "  " + pct + "%  (" + (lightboxState.index + 1) + "/" + items.length + ")";
+    updateSoundToggleUI();
+  }
+
+  // 音の状態は #lightbox-info の文字列に混ぜず、独立した大きめのボタンで表示する
+  // (アイコン単体だと 11px では判別しづらいため、アイコン+ラベル+枠色の3つで示す)
+  function updateSoundToggleUI() {
+    // 操作バーは再生できる動画のときだけ出す(画像・再生不可の表示では出さない)
+    lightboxControlsEl.style.display = lightboxState.isVideo && !lightboxState.videoError ? "flex" : "none";
+    if (!lightboxState.isVideo) {
+      lightboxSoundToggleBtn.style.display = "none";
+      return;
+    }
+    lightboxSoundToggleBtn.style.display = "flex";
+    lightboxSoundToggleBtn.classList.toggle("muted", !lightboxState.soundOn);
+    var icon = lightboxState.soundOn ? "🔊" : "🔇";
+    var label = lightboxState.soundOn ? S.soundOn : S.muted;
+    lightboxSoundToggleBtn.textContent = "";
+    var iconEl = document.createElement("span");
+    iconEl.className = "lightbox-sound-icon";
+    iconEl.textContent = icon;
+    lightboxSoundToggleBtn.appendChild(iconEl);
+    lightboxSoundToggleBtn.appendChild(document.createTextNode(label));
+  }
+
+  function toggleLightboxSound() {
+    if (!lightboxState.isVideo) return;
+    lightboxState.soundOn = !lightboxState.soundOn;
+    if (lightboxState.soundOn) pauseAllAudioExcept(null); // ミュート解除で音が出る瞬間も同様に排他する
+    lightboxVideo.muted = !lightboxState.soundOn;
+    updateLightboxInfo();
+  }
+
+  function toggleLightboxVideoPlayback() {
+    if (!lightboxState.isVideo || lightboxState.videoError) return;
+    if (lightboxVideo.paused) {
+      if (lightboxState.soundOn) pauseAllAudioExcept(null); // 音あり再生になる瞬間は音声カードを止める
+      var playPromise = lightboxVideo.play();
+      if (playPromise && playPromise.catch) playPromise.catch(function () {});
+    } else {
+      lightboxVideo.pause();
+    }
+  }
+
+  createPlayerControls(lightboxVideo, lightboxControlsEl, { onToggle: toggleLightboxVideoPlayback });
+  // 操作バーの上のホイールで動画が拡大されないようにする(拡大の wheel ハンドラは #lightbox にある)
+  lightboxControlsEl.addEventListener("wheel", function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+  }, { passive: false });
+
+  // ---------------- lightbox: open / navigate / close ----------------
+  function loadLightboxImage() {
+    var item = items[lightboxState.index];
+    var path = item.path;
+    var isVideo = item.kind === "video";
+    lightboxState.isVideo = isVideo;
+    lightboxState.videoError = false;
+    lightboxState.naturalW = 0;
+    lightboxState.naturalH = 0;
+    lightboxErrorEl.style.display = "none";
+
+    // 前回表示分を止めて破棄(image/video どちらの残骸も引きずらない)
+    lightboxImg.onload = null;
+    lightboxImg.onerror = null;
+    lightboxImg.src = "";
+    lightboxVideo.onloadedmetadata = null;
+    lightboxVideo.onerror = null;
+    lightboxVideo.pause();
+    lightboxVideo.removeAttribute("src");
+    lightboxVideo.load();
+
+    if (isVideo) {
+      lightboxImg.style.display = "none";
+      lightboxVideo.style.display = "";
+      lightboxVideo.onloadedmetadata = function () {
+        lightboxState.naturalW = lightboxVideo.videoWidth;
+        lightboxState.naturalH = lightboxVideo.videoHeight;
+        setFitZoom();
+      };
+      lightboxVideo.onerror = function () {
+        lightboxState.videoError = true;
+        updateLightboxInfo();
+        lightboxVideo.style.display = "none";
+        lightboxErrorEl.textContent = S.cannotPlay(basename(path));
+        lightboxErrorEl.style.display = "block";
+      };
+      lightboxVideo.src = toImgSrc(path);
+      // ライトテーブル上の動画は全部ミュート(複数同時に鳴るとうるさい)。音はライトボックスで
+      // 1 本ずつ出す。ライトボックスはクリック(ユーザー操作)で開くので音あり再生が許可される。
+      // m でミュート切替(lightboxState.soundOn は次の動画にも引き継ぐ)
+      // 音あり再生になるときは、再生中の音声カードと二重に鳴らないよう先に止める
+      // (同時に鳴るのは1本だけ、という既存方針をライトボックス動画にも広げる)
+      if (lightboxState.soundOn) pauseAllAudioExcept(null);
+      lightboxVideo.muted = !lightboxState.soundOn;
+      var playPromise = lightboxVideo.play();
+      if (playPromise && playPromise.catch) {
+        playPromise.catch(function () {
+          // 音あり再生がブロックされたらミュートに落として再生だけは続ける
+          lightboxVideo.muted = true;
+          lightboxState.soundOn = false;
+          updateLightboxInfo();
+          var p2 = lightboxVideo.play();
+          if (p2 && p2.catch) p2.catch(function () {});
+        });
+      }
+    } else {
+      lightboxVideo.style.display = "none";
+      lightboxImg.style.display = "";
+      lightboxImg.onload = function () {
+        lightboxState.naturalW = lightboxImg.naturalWidth;
+        lightboxState.naturalH = lightboxImg.naturalHeight;
+        setFitZoom();
+      };
+      lightboxImg.onerror = function () {
+        lightboxImg.style.display = "none";
+        lightboxErrorEl.textContent = S.loadFailed(path);
+        lightboxErrorEl.style.display = "block";
+      };
+      lightboxImg.src = toImgSrc(path);
+    }
+    updateLightboxInfo();
+  }
+
+  function openLightbox(index) {
+    lightboxState.index = index;
+    lightboxEl.classList.add("active");
+    loadLightboxImage();
+  }
+
+  function closeLightbox() {
+    lightboxEl.classList.remove("active");
+    lightboxImg.src = "";
+    lightboxVideo.pause();
+    lightboxVideo.removeAttribute("src");
+    lightboxVideo.load();
+  }
+
+  // 音声アイテムは飛ばす(音声はライトボックスで扱わない)
+  function navigateLightbox(delta) {
+    var n = items.length;
+    if (n <= 1) return;
+    var next = lightboxState.index;
+    for (var i = 0; i < n; i++) {
+      next = (next + delta + n) % n;
+      if (items[next].kind !== "audio") break;
+    }
+    if (next === lightboxState.index) return; // 音声以外が他に無い(自分自身に戻ってきた)
+    lightboxState.index = next;
+    loadLightboxImage();
+  }
+
+  // ---------------- lightbox: mouse interaction ----------------
+  // image/video どちらが表示中でも同じ操作(pan/zoom)が効くよう、両要素に同じハンドラを付ける
+  // (非表示側は display:none でヒットテストされないため、実際に発火するのは表示中の要素だけ)
+  function onLightboxMediaMouseDown(e) {
+    e.preventDefault();
+    lightboxState.dragging = true;
+    lightboxState.didDrag = false;
+    lightboxState.dragStartX = e.clientX;
+    lightboxState.dragStartY = e.clientY;
+    lightboxState.dragOrigX = lightboxState.posX;
+    lightboxState.dragOrigY = lightboxState.posY;
+    activeLightboxMedia().classList.add("grabbing");
+  }
+
+  lightboxImg.addEventListener("dragstart", function (e) { e.preventDefault(); });
+  lightboxVideo.addEventListener("dragstart", function (e) { e.preventDefault(); });
+  lightboxImg.addEventListener("mousedown", onLightboxMediaMouseDown);
+  lightboxVideo.addEventListener("mousedown", onLightboxMediaMouseDown);
+
+  document.addEventListener("mousemove", function (e) {
+    if (!lightboxState.dragging) return;
+    var dx = e.clientX - lightboxState.dragStartX;
+    var dy = e.clientY - lightboxState.dragStartY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) lightboxState.didDrag = true;
+    lightboxState.posX = lightboxState.dragOrigX + dx;
+    lightboxState.posY = lightboxState.dragOrigY + dy;
+    renderLightboxTransform();
+  });
+
+  document.addEventListener("mouseup", function () {
+    if (lightboxState.dragging) {
+      lightboxState.dragging = false;
+      activeLightboxMedia().classList.remove("grabbing");
+    }
+  });
+
+  lightboxBackdrop.addEventListener("click", function (e) {
+    if (e.target !== lightboxBackdrop) return;
+    if (lightboxState.didDrag) {
+      lightboxState.didDrag = false;
+      return;
+    }
+    closeLightbox();
+  });
+
+  lightboxEl.addEventListener("wheel", function (e) {
+    e.preventDefault();
+    var factor = Math.exp(-e.deltaY * 0.0015);
+    applyZoomAtPoint(lightboxState.zoom * factor, e.clientX, e.clientY);
+  }, { passive: false });
+
+  lightboxSoundToggleBtn.addEventListener("click", function (e) {
+    e.stopPropagation();
+    toggleLightboxSound();
+  });
+
+  lightboxCloseBtn.addEventListener("click", closeLightbox);
+
+  // ---------------- keyboard shortcuts ----------------
+  function onKeyDown(e) {
+    // ⌘W / Ctrl+W = 窓を閉じる。ライトボックス・選択モード中でも効かせる
+    if ((e.metaKey || e.ctrlKey) && (e.key === "w" || e.key === "W")) {
+      e.preventDefault();
+      if (typeof window.__moodboardClose === "function") window.__moodboardClose();
+      return;
+    }
+    if (document.activeElement && document.activeElement.tagName === "INPUT") return;
+
+    if (lightboxEl.classList.contains("active")) {
+      switch (e.key) {
+        case "Escape": closeLightbox(); break;
+        case "0": setFitZoom(); break;
+        case "1": setZoomCentered(1); break;
+        case "2": setZoomCentered(2); break;
+        case "ArrowLeft": navigateLightbox(-1); break;
+        case "ArrowRight": navigateLightbox(1); break;
+        case "b": cycleBackground(); break;
+        case "m": toggleLightboxSound(); break;
+        case " ":
+          // ボタンにフォーカスが残っていると keyup でそのボタンも押されるので、先に外す
+          if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+          toggleLightboxVideoPlayback();
+          break;
+        default: return;
+      }
+      e.preventDefault();
+    } else {
+      switch (e.key) {
+        case "b": cycleBackground(); break;
+        case "+": case "=": adjustBaseSize(20); break;
+        case "-": case "_": adjustBaseSize(-20); break;
+        case "r": layoutItems(); break;
+        case "s": setSelectMode(!selectMode); break;
+        case "Escape": if (selectMode) setSelectMode(false); else return; break;
+        case "a":
+          if (selectMode && (e.metaKey || e.ctrlKey)) selectAll();
+          else return;
+          break;
+        case "c":
+          if (selectMode && (e.metaKey || e.ctrlKey) && selected.size > 0) copySelectedPaths();
+          else return;
+          break;
+        default: return;
+      }
+      e.preventDefault();
+    }
+  }
+
+  document.addEventListener("keydown", onKeyDown);
+
+  // ---------------- launcher bridge ----------------
+  // __moodboardLoad / __moodboardReady / __moodboardPoll / __moodboardClose は moodboard.ts が webview.bind で注入する。
+  // http 経由の検証用ページでは、検証スクリプトが exposeFunction / addInitScript で同名のものを注入する
+  function notifyLauncherReady() {
+    var requestId = new URLSearchParams(window.location.search).get("rid");
+    if (requestId && typeof window.__moodboardReady === "function") {
+      window.__moodboardReady(requestId, failedPaths);
+    }
+  }
+
+  // 同名 target への差し替え要求を受け取り、新しい board のページに置き換える
+  function startReplacePolling() {
+    if (typeof window.__moodboardPoll !== "function") return;
+    setInterval(function () {
+      window.__moodboardPoll().then(function (url) {
+        if (url) window.location.replace(url);
+      });
+    }, REPLACE_POLL_MS);
+  }
+
+  // __moodboardLoad が失敗したときの表示。「board を渡さず開いた(本当に空)」の #empty-state とは
+  // 別にする。ランチャー側のタイムアウト後始末の変更で、窓が受け取り済みの board ファイルは
+  // タイムアウトでは消さない方針にしたが、それでも state ディレクトリの競合や rid 不一致などで
+  // 読み込みに失敗することはあり得るので、その場合はここで「失敗した」とはっきり示す
+  // (方針: moodboard.ts の showBoard/sweepStaleFiles のコメント参照)
+  function renderLoadError() {
+    headerEl.style.display = "none";
+    canvasEl.style.display = "none";
+    emptyStateEl.style.display = "none";
+    loadErrorStateEl.style.display = "flex";
+  }
+
+  // ---------------- init ----------------
+  function applyLanguage() {
+    document.documentElement.lang = LANG;
+    Array.prototype.forEach.call(document.querySelectorAll("[data-i18n]"), function (el) {
+      el.textContent = S[el.getAttribute("data-i18n")];
+    });
+    Array.prototype.forEach.call(document.querySelectorAll("[data-i18n-title]"), function (el) {
+      el.title = S[el.getAttribute("data-i18n-title")];
+    });
+    // ヒントは「キー=説明」ごとに折り返さない単位にする(日本語は語の途中でも折り返せるため、
+    // 1 本の文字列だと「s=選」「択」のように割れる)。"|" で区切ったまとまり(キャンバスの操作 /
+    // lightbox の操作)は 1 つの箱にし、1 行に収まらないときはまとまりごと次の行へ送る
+    Array.prototype.forEach.call(document.querySelectorAll("[data-hint]"), function (el) {
+      el.textContent = "";
+      var group = null;
+      S[el.getAttribute("data-hint")].forEach(function (token) {
+        if (token === "|" || group === null) {
+          group = document.createElement("span");
+          group.className = "hint-group";
+          el.appendChild(group);
+          if (token === "|") return;
+        }
+        var part = document.createElement("span");
+        part.className = "hint-item";
+        part.textContent = token;
+        group.appendChild(part);
+      });
+    });
+    bgToggleBtn.textContent = S.background(BG_STATES[bgIndex]);
+    updateCopyButton();
+  }
+
+  function init() {
+    applyLanguage();
+    setBaseSize(parseInt(gridSizeSlider.value, 10));
+    startReplacePolling();
+
+    var rid = new URLSearchParams(window.location.search).get("rid");
+    if (rid && typeof window.__moodboardLoad === "function") {
+      window.__moodboardLoad(rid).then(function (board) {
+        loadBoard(board);
+        renderCanvas();
+      }, function (err) {
+        console.error("moodboard: board の読み込みに失敗しました", err);
+        renderLoadError();
+      });
+    } else {
+      loadBoard(null);
+      renderCanvas();
+    }
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

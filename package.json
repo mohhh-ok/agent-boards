@@ -1,0 +1,18 @@
+{
+  "name": "moodboard",
+  "version": "1.0.0",
+  "description": "A macOS window for checking what your AI generated. Your coding agent opens its images, videos and audio side by side; you compare them and pick.",
+  "type": "module",
+  "bin": {
+    "moodboard": "./moodboard.ts"
+  },
+  "license": "MIT",
+  "author": "MOhhh",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mohhh-ok/moodboard.git"
+  },
+  "dependencies": {
+    "webview-bun": "^2.4.0"
+  }
+}
