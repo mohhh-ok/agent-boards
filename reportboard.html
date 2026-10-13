@@ -498,6 +498,7 @@ async function sendFrom(panel) {
     box.value = "";
     drafts.delete(panel.dataset.key);
     sentAwaiting.add(panel.dataset.key);
+    status.textContent = "";
     renderThreads(result.threads);
   } catch (error) {
     status.className = "composer-status is-error";
