@@ -1,18 +1,29 @@
 {
-  "name": "moodboard",
-  "version": "1.0.0",
-  "description": "A macOS window for checking what your AI generated. Your coding agent opens its images, videos and audio side by side; you compare them and pick.",
+  "name": "agent-boards",
+  "version": "0.1.0",
+  "description": "macOS windows your coding agent opens to show you its work: moodboard (images, video, audio), textboard (revise text together) and reportboard (read a report).",
   "type": "module",
   "bin": {
-    "moodboard": "./moodboard.ts"
+    "moodboard": "./moodboard.ts",
+    "textboard": "./textboard.ts",
+    "reportboard": "./reportboard.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
   },
   "license": "MIT",
   "author": "MOhhh",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mohhh-ok/moodboard.git"
+    "url": "git+https://github.com/mohhh-ok/agent-boards.git"
   },
   "dependencies": {
+    "marked": "^16.0.0",
     "webview-bun": "^2.4.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.9.0"
   }
 }

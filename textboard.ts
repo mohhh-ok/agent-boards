@@ -1,13 +1,13 @@
 #!/usr/bin/env bun
 // Launcher that opens textboard.html in a webview-bun window. No server or browser needed.
-// Its structure follows the launcher of moodboard (github.com/mohhh-ok/moodboard).
+// Named windows, locks, acks and the state directory are shared with moodboard and reportboard (lib/windows.ts).
 //
 // Usage:
 //   textboard --target <name> <file>                  Open. If a window with that name exists, switch it to the file
 //   textboard wait --target <name> [--timeout <sec>]  Wait until the window sends an instruction to the AI; print it as JSON on stdout
 //   textboard --close <name>                          Close only the window with that name
 //   textboard --list                                  List the open named windows
-// Every form may start with --lang ja|en (display language; see "Language" in the README)
+// Every form may start with --lang ja|en (display language; see "Language" in docs/textboard.md)
 //
 // The launcher starts the window as a child process in its own session (detached) and exits after the page
 // acknowledges that it loaded the file (ack). Exit codes:
@@ -20,43 +20,22 @@
 // Bun's event loop does not run during webview.run(), so the window process cannot push anything to the page.
 // The page calls __textboardPoll periodically to receive replace requests, outside changes to the file and whether a wait is running.
 import { Webview, SizeHint } from "webview-bun";
-import { spawn, spawnSync } from "node:child_process";
-import {
-  closeSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  readSync,
-  readdirSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { spawnSync, type ChildProcess } from "node:child_process";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { installEditMenu } from "./editMenu.ts";
+import { applyLang, createI18n, type Lang } from "./lib/lang.ts";
+import { createWindowHost, isValidTargetName } from "./lib/windows.ts";
 
-if (process.getuid === undefined) throw new Error("textboard supports POSIX environments only");
-const USER_ID = process.getuid();
-// TMPDIR can differ between agent environments, so use a fixed place shared by every process of the same user.
-// Other users can write to /tmp, so use a 0700 directory named with the uid and check its owner
-const STATE_DIR = `/tmp/textboard-${USER_ID}`;
-const TARGETS_DIR = join(STATE_DIR, "targets");
-const ACKS_DIR = join(STATE_DIR, "acks");
-const LOGS_DIR = join(STATE_DIR, "logs");
-const BOARDS_DIR = join(STATE_DIR, "boards");
-const OUTBOX_DIR = join(STATE_DIR, "outbox");
-const READY_TIMEOUT_MS = 20_000;
-const ACK_POLL_MS = 100;
+const scriptPath = fileURLToPath(import.meta.url);
+const htmlPath = resolve(dirname(scriptPath), "textboard.html");
+// State lives in /tmp/textboard-<uid>/ (lib/windows.ts). outbox/ holds the instructions not yet taken by a wait
+const host = createWindowHost({ name: "textboard", scriptPath, htmlPath, extraDirs: ["outbox"] });
+const OUTBOX_DIR = join(host.stateDir, "outbox");
 const WAIT_POLL_MS = 300;
-const LOCK_WAIT_MS = READY_TIMEOUT_MS + 5_000;
-const STALE_FILE_MS = READY_TIMEOUT_MS * 5;
-const TARGET_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
 // Larger files are not treated as text (the size assumes editing in a textarea)
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 // Where comments are stored. Kept here rather than next to the document, so no extra files appear in the user's repository.
@@ -64,19 +43,14 @@ const MAX_FILE_BYTES = 5 * 1024 * 1024;
 // document detaches its comments. TEXTBOARD_HOME changes the location (for verification)
 const COMMENTS_DIR = join(process.env.TEXTBOARD_HOME || join(homedir(), ".textboard"), "comments");
 
-const scriptPath = fileURLToPath(import.meta.url);
-const htmlPath = resolve(dirname(scriptPath), "textboard.html");
-
 type WindowConfig = { target: string; url: string; requestId: string; lang: Lang };
 type Ack = { pid: number; refused?: "unsaved" };
 // What to show for one request. Written to boards/<rid>.json; the page reads it with __textboardLoad(rid)
 type Board = { path: string };
 
 // ---------------- Display language ----------------
-// Chosen the same way as moodboard: --lang > TEXTBOARD_LANG > the macOS language setting. Anything but ja is en.
-// $LANG is not used (agents and terminals often set en_US.UTF-8 even when macOS is in Japanese).
+// Chosen in lib/lang.ts: --lang > TEXTBOARD_LANG > the macOS language setting. Anything but ja is en.
 // The `opened ...` line on success and the JSON from wait are for scripts, so they are not translated
-type Lang = "ja" | "en";
 const MESSAGES = {
   ja: {
     usage:
@@ -121,56 +95,31 @@ const MESSAGES = {
   },
 } satisfies Record<Lang, unknown>;
 
-let lang: Lang = "en";
-let M = MESSAGES[lang];
-
-function setLang(next: Lang) {
-  lang = next;
-  M = MESSAGES[next];
-}
-
-function parseLang(value: string | undefined, source: string): Lang {
-  if (value === "ja" || value === "en") return value;
-  usageError(M.badLang(source, value ?? ""));
-}
-
-// `defaults read -g AppleLanguages` prints `(\n    "ja-JP",\n    en\n)`. The first one is the preferred language
-function systemLang(): Lang {
-  const result = spawnSync("defaults", ["read", "-g", "AppleLanguages"], { encoding: "utf8" });
-  const first = result.status === 0 ? /\(\s*"?([^",\s)]+)/.exec(result.stdout)?.[1] : undefined;
-  return first?.toLowerCase().startsWith("ja") ? "ja" : "en";
-}
+const i18n = createI18n(MESSAGES);
 
 if (import.meta.main) await main(process.argv.slice(2));
 
 async function main(argv: string[]) {
   if (argv[0] === "--window") {
-    ensureStateDir();
+    host.ensureStateDir(badStateDir);
     runWindow(JSON.parse(argv[1]) as WindowConfig);
     return;
   }
 
-  setLang(systemLang());
-  const envLang = process.env.TEXTBOARD_LANG;
-  if (argv[0] === "--lang") {
-    setLang(parseLang(argv[1], "--lang"));
-    argv = argv.slice(2);
-  } else if (envLang !== undefined && envLang !== "") {
-    setLang(parseLang(envLang, "TEXTBOARD_LANG"));
-  }
-  ensureStateDir();
-  if (argv[0] === "--close") process.exit(closeTarget(requireTargetName(argv[1])));
+  argv = applyLang({ argv, envName: "TEXTBOARD_LANG", i18n, onBad: (source, value) => usageError(i18n.M.badLang(source, value)) });
+  host.ensureStateDir(badStateDir);
+  if (argv[0] === "--close") process.exit(host.closeTarget(requireTargetName(argv[1]), i18n.M.notOpen));
   if (argv[0] === "--list") {
-    listTargets();
+    host.listTargets();
     return;
   }
   if (argv[0] === "wait") process.exit(await waitForInstruction(argv.slice(1)));
 
-  sweepStaleFiles();
-  if (argv[0] !== "--target") usageError(M.badTargetName);
+  host.sweepStaleFiles();
+  if (argv[0] !== "--target") usageError(i18n.M.badTargetName);
   const target = requireTargetName(argv[1]);
   const rest = argv.slice(2);
-  if (rest.length !== 1) usageError(M.oneFile);
+  if (rest.length !== 1) usageError(i18n.M.oneFile);
   const path = checkedTextFile(rest[0]);
   process.exit(await openFile(target, path));
 }
@@ -179,16 +128,16 @@ async function main(argv: string[]) {
 
 function checkedTextFile(arg: string): string {
   const path = resolve(arg);
-  if (!existsSync(path)) fatal(M.notFound(path));
+  if (!existsSync(path)) fatal(i18n.M.notFound(path));
   const stat = statSync(path);
-  if (!stat.isFile()) fatal(M.notFile(path));
-  if (stat.size > MAX_FILE_BYTES) fatal(M.tooLarge(path));
+  if (!stat.isFile()) fatal(i18n.M.notFile(path));
+  if (stat.size > MAX_FILE_BYTES) fatal(i18n.M.tooLarge(path));
   // Treat it as binary if the first 8 KB contain NUL (the same test as git)
   const fd = openSync(path, "r");
   const head = Buffer.alloc(Math.min(8192, stat.size));
   readSync(fd, head, 0, head.length, 0);
   closeSync(fd);
-  if (head.includes(0)) fatal(M.notText(path));
+  if (head.includes(0)) fatal(i18n.M.notText(path));
   return path;
 }
 
@@ -196,73 +145,46 @@ function checkedTextFile(arg: string): string {
 
 async function openFile(target: string, path: string): Promise<number> {
   // If two launches for the same name overlap, both decide "not open" and two windows open. Serialize with a per-name lock
-  const lock = await acquireTargetLock(target);
+  const lock = await host.acquireTargetLock(target);
   if (!lock) {
-    console.error(M.lockFailed(target, lockPath(target)));
+    console.error(i18n.M.lockFailed(target, host.lockPath(target)));
     return 2;
   }
   try {
     return await showFile(target, path);
   } finally {
-    rmSync(lockPath(target), { recursive: true, force: true });
+    host.releaseTargetLock(target);
   }
 }
 
 async function showFile(target: string, path: string): Promise<number> {
   const requestId = randomUUID();
-  writeFileSync(boardPath(requestId), JSON.stringify({ path } satisfies Board));
-  const url = buildUrl(requestId);
-  const existingPid = findWindowPid(target);
+  host.writeBoard(requestId, { path } satisfies Board);
+  const url = host.buildUrl(requestId, i18n.lang);
+  const existingPid = host.findWindowPid(target);
 
-  let child: ReturnType<typeof spawn> | null = null;
+  let child: ChildProcess | null = null;
   let logPath: string | null = null;
   if (existingPid !== null) {
-    // Include the destination pid so that a window opened later under the same name does not pick up an old request
-    writeFileSync(requestPath(target), JSON.stringify({ requestId, url, pid: existingPid }));
+    host.writeReplaceRequest(target, { requestId, url, pid: existingPid });
   } else {
-    logPath = join(LOGS_DIR, `${requestId}.log`);
-    const logFd = openSync(logPath, "a");
-    const config: WindowConfig = { target, url, requestId, lang };
-    child = spawn(process.execPath, [scriptPath, "--window", JSON.stringify(config)], {
-      detached: true,
-      stdio: ["ignore", logFd, logFd],
-    });
-    child.unref();
+    const config: WindowConfig = { target, url, requestId, lang: i18n.lang };
+    ({ child, logPath } = host.spawnWindow({ requestId, config }));
   }
 
-  const ack = await waitForAck(requestId, child);
+  const ack = await host.waitForAck<Ack>({ requestId, child });
   const action = existingPid !== null ? "replaced" : "new";
   if (ack === null) {
-    // If the replace request has not been taken yet, delete it and the board (nobody will read them). If it was taken,
-    // the window may be loading it, so leave them to the window's __textboardLoad and the next sweepStaleFiles (as in moodboard)
-    if (existingPid === null || existsSync(requestPath(target))) {
-      rmSync(requestPath(target), { force: true });
-      rmSync(boardPath(requestId), { force: true });
-    }
-    console.error(M.notShown(target, existingPid !== null) + (logPath ? `\nlog: ${logPath}` : ""));
+    host.discardUnreceived({ target, requestId, replaced: existingPid !== null });
+    console.error(i18n.M.notShown(target, existingPid !== null) + (logPath ? `\nlog: ${logPath}` : ""));
     return 2;
   }
   if (ack.refused === "unsaved") {
-    console.error(M.refusedUnsaved(target));
+    console.error(i18n.M.refusedUnsaved(target));
     return 3;
   }
   console.log(`opened target=${target} pid=${ack.pid} ${action} file=${path}`);
   return 0;
-}
-
-async function waitForAck(requestId: string, child: ReturnType<typeof spawn> | null): Promise<Ack | null> {
-  const path = ackPath(requestId);
-  const deadline = Date.now() + READY_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    if (existsSync(path)) {
-      const ack = JSON.parse(readFileSync(path, "utf8")) as Ack;
-      rmSync(path);
-      return ack;
-    }
-    if (child !== null && child.exitCode !== null) return null;
-    await Bun.sleep(ACK_POLL_MS);
-  }
-  return null;
 }
 
 // ---------------- Window process ----------------
@@ -283,8 +205,7 @@ function sameStamp(a: DiskStamp, b: DiskStamp): boolean {
 }
 
 function runWindow(config: WindowConfig) {
-  writeFileSync(pidPath(config.target), String(process.pid));
-  rmSync(requestPath(config.target), { force: true });
+  host.registerWindow(config.target);
   mkdirSync(outboxDir(config.target), { recursive: true, mode: 0o700 });
 
   // The open file and its state on disk when last read or written. Used to detect outside changes
@@ -301,9 +222,7 @@ function runWindow(config: WindowConfig) {
 
   // Bun's event loop is stopped during run(), so callbacks use synchronous I/O only
   webview.bind("__textboardLoad", (rid: string) => {
-    const path = boardPath(rid);
-    const board = JSON.parse(readFileSync(path, "utf8")) as Board;
-    rmSync(path, { force: true });
+    const board = host.takeBoard<Board>(rid);
     currentPath = board.path;
     lastStamp = stampOf(board.path);
     const text = readFileSync(board.path, "utf8");
@@ -322,9 +241,9 @@ function runWindow(config: WindowConfig) {
 
   webview.bind("__textboardReady", (rid: string, result: { refused?: "unsaved" } | null) => {
     const ack: Ack = { pid: process.pid, ...(result?.refused ? { refused: result.refused } : {}) };
-    writeFileSync(ackPath(rid), JSON.stringify(ack));
+    host.writeAck(rid, ack);
     // When the switch was refused, delete the board that was not read
-    if (result?.refused) rmSync(boardPath(rid), { force: true });
+    if (result?.refused) rmSync(host.boardPath(rid), { force: true });
   });
 
   webview.bind("__textboardSave", (content: string) => {
@@ -370,13 +289,7 @@ function runWindow(config: WindowConfig) {
 
   // Called by the page every 500 ms. Returns a replace request, outside changes to the file, whether a wait is running, and the instructions not yet taken
   webview.bind("__textboardPoll", () => {
-    let replaceUrl: string | null = null;
-    const request = requestPath(config.target);
-    if (existsSync(request)) {
-      const parsed = JSON.parse(readFileSync(request, "utf8")) as { url: string; pid: number };
-      rmSync(request);
-      if (parsed.pid === process.pid) replaceUrl = parsed.url;
-    }
+    const replaceUrl = host.takeReplaceRequest(config.target);
     let disk: { text: string | null } | null = null;
     if (currentPath !== null) {
       const stamp = stampOf(currentPath);
@@ -395,18 +308,13 @@ function runWindow(config: WindowConfig) {
 
   // ⌘W. webview-bun exposes no way to stop run() from outside, so clean up and exit the whole process
   webview.bind("__textboardClose", () => {
-    cleanupWindow(config);
+    host.cleanupWindow(config);
     process.exit(0);
   });
 
   webview.navigate(config.url);
   webview.run();
-  cleanupWindow(config);
-}
-
-function cleanupWindow(config: WindowConfig) {
-  rmSync(boardPath(config.requestId), { force: true });
-  if (readPid(config.target) === process.pid) rmSync(pidPath(config.target));
+  host.cleanupWindow(config);
 }
 
 // ---------------- wait ----------------
@@ -418,11 +326,11 @@ async function waitForInstruction(args: string[]): Promise<number> {
     if (args[i] === "--target") target = requireTargetName(args[i + 1]);
     else if (args[i] === "--timeout") {
       const seconds = Number(args[i + 1]);
-      if (!Number.isFinite(seconds) || seconds <= 0) usageError(M.badTimeout);
+      if (!Number.isFinite(seconds) || seconds <= 0) usageError(i18n.M.badTimeout);
       timeoutMs = seconds * 1000;
-    } else usageError(M.badTargetName);
+    } else usageError(i18n.M.badTargetName);
   }
-  if (target === null) usageError(M.badTargetName);
+  if (target === null) usageError(i18n.M.badTargetName);
 
   // Hand over a queued instruction first, even if the window is not open
   const queued = takeInstruction(target);
@@ -430,8 +338,8 @@ async function waitForInstruction(args: string[]): Promise<number> {
     process.stdout.write(queued);
     return 0;
   }
-  if (findWindowPid(target) === null) {
-    console.error(M.notOpen(target));
+  if (host.findWindowPid(target) === null) {
+    console.error(i18n.M.notOpen(target));
     return 1;
   }
 
@@ -458,14 +366,14 @@ async function waitForInstruction(args: string[]): Promise<number> {
       }
       if (Date.now() - lastWindowCheck > 1000) {
         lastWindowCheck = Date.now();
-        if (findWindowPid(target) === null && takeInstructionPeek(target) === 0) {
-          console.error(M.windowClosed(target));
+        if (host.findWindowPid(target) === null && takeInstructionPeek(target) === 0) {
+          console.error(i18n.M.windowClosed(target));
           return 3;
         }
       }
       await Bun.sleep(WAIT_POLL_MS);
     }
-    console.error(M.waitTimeout(target));
+    console.error(i18n.M.waitTimeout(target));
     return 2;
   } finally {
     removeMarker();
@@ -520,112 +428,17 @@ function waiterAlive(target: string): boolean {
   return false;
 }
 
-// ---------------- --close / --list ----------------
-
-function closeTarget(target: string): number {
-  const pid = findWindowPid(target);
-  if (pid === null) {
-    console.error(M.notOpen(target));
-    return 1;
-  }
-  try {
-    process.kill(pid, "SIGTERM");
-  } catch (error) {
-    if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) throw error;
-  }
-  rmSync(pidPath(target), { force: true });
-  console.log(`closed target=${target} pid=${pid}`);
-  return 0;
-}
-
-function listTargets() {
-  for (const file of readdirSync(TARGETS_DIR)) {
-    if (!file.endsWith(".pid")) continue;
-    const target = file.slice(0, -".pid".length);
-    const pid = findWindowPid(target);
-    if (pid !== null) console.log(`${target}\tpid=${pid}`);
-  }
-}
-
-// Check that the process in the pid file is still textboard's window for that name. Delete stale pid files
-function findWindowPid(target: string): number | null {
-  const pid = readPid(target);
-  if (pid === null) return null;
-  const ps = spawnSync("ps", ["-p", String(pid), "-o", "args="], { encoding: "utf8" });
-  const args = ps.stdout.trim();
-  const isThisTarget = args.includes(scriptPath) && args.includes("--window") && args.includes(`"target":"${target}"`);
-  if (ps.status === 0 && isThisTarget) return pid;
-  rmSync(pidPath(target), { force: true });
-  return null;
-}
-
-// ---------------- State directory ----------------
-
-// Using a directory or symlink created first by another user would let them plant request files or redirect writes
-function ensureStateDir() {
-  try {
-    mkdirSync(STATE_DIR, { mode: 0o700 });
-  } catch (error) {
-    if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
-  }
-  const stat = lstatSync(STATE_DIR);
-  const isOwnPrivateDir = stat.isDirectory() && stat.uid === USER_ID && (stat.mode & 0o077) === 0;
-  if (!isOwnPrivateDir) {
-    console.error(M.badStateDir(STATE_DIR));
-    process.exit(1);
-  }
-  for (const dir of [TARGETS_DIR, ACKS_DIR, LOGS_DIR, BOARDS_DIR, OUTBOX_DIR]) mkdirSync(dir, { recursive: true, mode: 0o700 });
-}
-
-async function acquireTargetLock(target: string): Promise<boolean> {
-  const path = lockPath(target);
-  const deadline = Date.now() + LOCK_WAIT_MS;
-  while (Date.now() < deadline) {
-    try {
-      mkdirSync(path);
-      return true;
-    } catch (error) {
-      if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
-      if (Date.now() - statSync(path).mtimeMs > LOCK_WAIT_MS) rmSync(path, { recursive: true, force: true });
-      await Bun.sleep(ACK_POLL_MS);
-    }
-  }
-  return false;
-}
-
-// Clean up old files left unread in boards/ and acks/ (the outbox is kept until a wait takes it)
-function sweepStaleFiles(): void {
-  const deadline = Date.now() - STALE_FILE_MS;
-  for (const dir of [BOARDS_DIR, ACKS_DIR]) {
-    for (const file of readdirSync(dir)) {
-      const path = join(dir, file);
-      try {
-        if (statSync(path).mtimeMs < deadline) rmSync(path, { force: true });
-      } catch (error) {
-        if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
-      }
-    }
-  }
-}
-
-function readPid(target: string): number | null {
-  const path = pidPath(target);
-  if (!existsSync(path)) return null;
-  const pid = Number(readFileSync(path, "utf8").trim());
-  return Number.isInteger(pid) && pid > 0 ? pid : null;
-}
-
-function buildUrl(requestId: string): string {
-  return "file://" + htmlPath.split("/").map(encodeURIComponent).join("/") + "?rid=" + requestId + "&lang=" + lang;
-}
-
 function requireTargetName(name: string | undefined): string {
-  if (name === undefined || !TARGET_NAME_PATTERN.test(name)) usageError(M.badTargetName);
+  if (!isValidTargetName(name)) usageError(i18n.M.badTargetName);
   return name;
 }
 
+function badStateDir(dir: string): never {
+  return fatal(i18n.M.badStateDir(dir));
+}
+
 function usageError(message: string): never {
-  fatal(`${message}\n${M.usage}`);
+  fatal(`${message}\n${i18n.M.usage}`);
 }
 
 function fatal(message: string): never {
@@ -637,30 +450,11 @@ export function commentsPath(path: string) {
   return join(COMMENTS_DIR, createHash("sha256").update(path).digest("hex") + ".json");
 }
 
-function pidPath(target: string) {
-  return join(TARGETS_DIR, `${target}.pid`);
-}
-
-function requestPath(target: string) {
-  return join(TARGETS_DIR, `${target}.request.json`);
-}
-
-function lockPath(target: string) {
-  return join(TARGETS_DIR, `${target}.lock`);
-}
-
 function waitersDir(target: string) {
-  return join(TARGETS_DIR, `${target}.waiters`);
+  return join(host.targetsDir, `${target}.waiters`);
 }
 
 function outboxDir(target: string) {
   return join(OUTBOX_DIR, target);
 }
 
-function ackPath(requestId: string) {
-  return join(ACKS_DIR, `${requestId}.json`);
-}
-
-function boardPath(requestId: string) {
-  return join(BOARDS_DIR, `${requestId}.json`);
-}

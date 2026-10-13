@@ -19,7 +19,7 @@ Open it with the `textboard` command (a WKWebView window via bun + webview-bun).
 ## Opening
 
 ```sh
-command -v textboard >/dev/null || bun install -g github:mohhh-ok/textboard
+command -v textboard >/dev/null || bun install -g github:mohhh-ok/agent-boards
 textboard --target <name> <file>; echo "rc=$?"
 ```
 
@@ -113,4 +113,4 @@ textboard --list           # open named windows
 - State files are in `/tmp/textboard-<uid>/` (mode 700): per-name pids in targets, instructions not yet taken in outbox, logs of new windows in logs
 - Comments are saved in `~/.textboard/comments/`; nothing is created next to the document (in the repository)
 - The window and CLI messages are in Japanese or English, following the macOS language setting (`--lang ja|en` or `TEXTBOARD_LANG` to choose). The `opened ...` line and the JSON from wait are the same in every language
-- How to change and verify the window itself: [docs/development.md](https://github.com/mohhh-ok/textboard/blob/main/docs/development.md)
+- How to change and verify the window itself: [docs/development.md](https://github.com/mohhh-ok/agent-boards/blob/main/docs/textboard-development.md)

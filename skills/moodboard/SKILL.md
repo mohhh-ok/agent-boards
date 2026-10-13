@@ -10,7 +10,7 @@ description: 複数画像(PNG/WebP/animated GIF)・動画(mov/webm/mp4)・音声
 ## 開き方
 
 ```sh
-command -v moodboard >/dev/null || bun install -g github:mohhh-ok/moodboard
+command -v moodboard >/dev/null || bun install -g github:mohhh-ok/agent-boards
 moodboard --target <名前> <画像/動画/音声パス...>; echo "rc=$?"
 ```
 
@@ -49,7 +49,7 @@ moodboard --target <名前> --json /tmp/<プロジェクト>/board.json; echo "r
 - `items` は必須・空不可。`path` は絶対パスか JSON ファイルのディレクトリ基準の相対パス。`label`(任意)未指定ならファイル名が出る
 - 未知のキー・型違い・空配列・存在しないパスは、窓を開く前に rc=1 で拒否される
 - `--json` とパス列挙(`moodboard <パス...>`)の併用は rc=1 のエラー
-- 完全な形式・検証ルールは [README](https://github.com/mohhh-ok/moodboard) の「Board JSON」節が正
+- 完全な形式・検証ルールは [docs/moodboard.md](https://github.com/mohhh-ok/agent-boards/blob/main/docs/moodboard.md) の「Board JSON」節が正
 
 ### 「開いた」と報告してよい条件
 
@@ -93,4 +93,4 @@ moodboard --list           # 開いている名前付きウィンドウ
 ## 備考
 
 - 窓を閉じればプロセスも終わる。状態ファイルは `/tmp/moodboard-<uid>/`(権限 700。他ユーザーは触れない)(targets に名前ごとの pid、logs に新規起動のログ、boards に board JSON。boards は読まれ次第すぐ消えるので基本空)
-- ビューア本体の変更・検証手順は [docs/development.md](https://github.com/mohhh-ok/moodboard/blob/main/docs/development.md)
+- ビューア本体の変更・検証手順は [docs/development.md](https://github.com/mohhh-ok/agent-boards/blob/main/docs/moodboard-development.md)

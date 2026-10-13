@@ -1,6 +1,6 @@
 # Development
 
-Notes for changing the viewer itself. For usage, see the [README](../README.md).
+Notes for changing the viewer itself. For usage, see [moodboard.md](moodboard.md).
 
 ## Never do this
 
@@ -19,7 +19,7 @@ Stop the server afterwards with `lsof -ti:<port> | xargs kill`.
 
 ## Implementation notes
 
-- The whole viewer is `moodboard.html` (self-contained HTML/CSS/JS, no external dependencies) plus `moodboard.ts` (the [webview-bun](https://github.com/tr1ckydev/webview-bun) launcher)
+- The whole viewer is `moodboard.html` (self-contained HTML/CSS/JS, no external dependencies) plus `moodboard.ts` (the [webview-bun](https://github.com/tr1ckydev/webview-bun) launcher). Named windows, locks, acks and the state directory come from `lib/windows.ts`, the display language from `lib/lang.ts` (shared with textboard and reportboard)
 - The launcher opens the window in a detached child process (its own session), waits until the page reports that every item has settled, then exits. That is why no `nohup` / `&` / `disown` is needed and the window survives the end of an agent's tool call
 - State lives in `/tmp/moodboard-<uid>/` (mode 0700, owner checked on every run): `targets/<name>.pid`, pending replace requests, acks, and logs of new windows
 - `moodboard.ts` turns the arguments (a path list or a validated `--json` file) into one board object with absolute paths, writes it to `/tmp/moodboard-<uid>/boards/<rid>.json`, and hands `moodboard.html?rid=<request id>` to webview-bun in a detached child (`moodboard.ts --window <config>`). The page reads the board through the bound `__moodboardLoad(rid)`. Nothing but the request id goes into the URL, so long notes and many paths never hit a URL length limit
@@ -28,6 +28,6 @@ Stop the server afterwards with `lsof -ti:<port> | xargs kill`.
 - Replacing a named window: the launcher writes `/tmp/moodboard-<uid>/targets/<name>.request.json`; the page polls the bound `__moodboardPoll()` every 500 ms and `location.replace`s to the new URL. Polling from the page is needed because Bun's event loop does not run while `webview.run()` owns the thread
 - Closing with `⌘W` / `Ctrl+W`: the page calls the bound `__moodboardClose()`. webview-bun does not expose `webview_terminate` outside `destroy()` (and `run()` calls `destroy()` again when it returns), so the window process runs the same cleanup as a normal close and then `process.exit(0)`s instead of stopping `run()`
 - webview-bun resolves its dylib/so through a package-relative import (`../build/libwebview.dylib` etc.), so it works under a global install as well (it reads from `node_modules/webview-bun/build/`)
-- Display language: every string shown in the window lives in the `STRINGS` table in `moodboard.html` (`ja` / `en`), and the CLI messages live in `MESSAGES` in `moodboard.ts`. Add a string to both languages. The launcher decides the language (rules: README "Language") and passes it as `lang` in the URL; in the http verification page, add `&lang=ja|en` yourself, or `navigator.language` is used
+- Display language: every string shown in the window lives in the `STRINGS` table in `moodboard.html` (`ja` / `en`), and the CLI messages live in `MESSAGES` in `moodboard.ts`. Add a string to both languages. The launcher decides the language (rules: "Language" in moodboard.md) and passes it as `lang` in the URL; in the http verification page, add `&lang=ja|en` yourself, or `navigator.language` is used
 - Verified on macOS (WKWebView) only. webview-bun ships Linux/Windows binaries too, but those have not been tested
 

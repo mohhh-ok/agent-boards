@@ -24,8 +24,8 @@ The agent can add a heading and a short label to each card ("current", "retake 2
 Install the command, then give your agent the skill that tells it how to use moodboard:
 
 ```sh
-bun install -g github:mohhh-ok/moodboard
-npx skills add mohhh-ok/moodboard
+bun install -g github:mohhh-ok/agent-boards
+npx skills add mohhh-ok/agent-boards
 ```
 
 The skill follows the [Agent Skills](https://github.com/anthropics/skills) format.

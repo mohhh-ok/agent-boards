@@ -2,7 +2,7 @@
 
 A window for revising text together with your AI.
 
-When your coding agent (Claude Code etc.) writes a document — a README, an article, a spec — it opens the file in textboard. You edit the text directly, leave comments on any passage, and send an instruction back to the agent ("address my comments", "make it shorter"). The agent rewrites the file, and the window reloads it. It is the text counterpart of [moodboard](https://github.com/mohhh-ok/moodboard).
+When your coding agent (Claude Code etc.) writes a document — a README, an article, a spec — it opens the file in textboard. You edit the text directly, leave comments on any passage, and send an instruction back to the agent ("address my comments", "make it shorter"). The agent rewrites the file, and the window reloads it. It is the text counterpart of [moodboard](moodboard.md).
 
 What you can do in the window:
 
@@ -19,15 +19,14 @@ The AI is not built in. The agent that opened the window does the rewriting.
 
 ## Setup
 
-Run it from a clone of this repository:
+Install the commands (moodboard, textboard and reportboard come together):
 
 ```sh
-git clone https://github.com/mohhh-ok/textboard.git
-cd textboard && bun install
-./textboard.ts --target demo README.md
+bun install -g github:mohhh-ok/agent-boards
+textboard --target demo README.md
 ```
 
-Give your agent the skill in [skills/textboard/SKILL.md](skills/textboard/SKILL.md), which tells it how to open the window and receive your instructions. The skill follows the [Agent Skills](https://github.com/anthropics/skills) format.
+Give your agent the skill in [skills/textboard/SKILL.md](../skills/textboard/SKILL.md), which tells it how to open the window and receive your instructions. The skill follows the [Agent Skills](https://github.com/anthropics/skills) format.
 
 ## Using the window
 
