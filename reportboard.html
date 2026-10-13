@@ -144,7 +144,8 @@
   .bar > span { display: block; height: 100%; background: var(--accent); }
 
   /* ---- ledger: "<name> — <number> <unit>. details" lists ---- */
-  .ledger-tools { scroll-margin-top: 56px; display: flex; justify-content: flex-end; margin: -6px 0 4px; }
+  .ledger-tools { scroll-margin-top: 56px; display: flex; justify-content: space-between; align-items: baseline; gap: 16px; margin: -6px 0 4px; }
+  .ledger-scale { font-size: 13px; color: var(--sub); }
   .text-button {
     font: inherit; font-size: 13px; color: var(--accent);
     background: none; border: 0; padding: 2px 0; cursor: pointer;
@@ -286,6 +287,8 @@ const STRINGS = {
     missing: "ファイルが見つかりません（移動か削除されました）。最後に読んだ内容を表示しています",
     more: "続きを読む",
     less: "閉じる",
+    barScale: (max) => `棒の長さは、この一覧で最大の ${max} に対する割合`,
+    columnScale: "棒の長さは、この列で最大の値に対する割合",
     openAll: "内訳をすべて開く",
     closeAll: "内訳をすべて閉じる",
     ask: "AI に聞く",
@@ -312,6 +315,8 @@ const STRINGS = {
     missing: "The file is gone (moved or deleted). Showing what was last read",
     more: "Read more",
     less: "Show less",
+    barScale: (max) => `Bars show each value against the largest in this list (${max})`,
+    columnScale: "Bars show each value against the largest in this column",
     openAll: "Open all details",
     closeAll: "Close all details",
     ask: "Ask the AI",
@@ -389,16 +394,20 @@ function render(report, { keepOpen }) {
     row.append(more);
     if (keepOpen.has(row.querySelector(".ledger-name").textContent)) row.classList.add("is-open");
   }
+  for (const th of $report.querySelectorAll("th.num")) th.title = T.columnScale;
   for (const list of $report.querySelectorAll(":scope > ul, :scope > ol:not(.ledger)")) {
     list.classList.toggle("is-long", list.children.length >= 6);
   }
   for (const ledger of document.querySelectorAll(".ledger")) {
     const tools = document.createElement("div");
     tools.className = "ledger-tools";
+    const scale = document.createElement("span");
+    scale.className = "ledger-scale";
+    if (ledger.dataset.max) scale.textContent = T.barScale(`${ledger.dataset.max} ${ledger.dataset.unit}`.trim());
     const all = document.createElement("button");
     all.type = "button";
     all.className = "text-button ledger-all";
-    tools.append(all);
+    tools.append(scale, all);
     ledger.before(tools);
   }
   sections = report.sections;
@@ -624,7 +633,7 @@ function measureRows() {
   }
   for (const tools of document.querySelectorAll(".ledger-tools")) {
     const rows = [...tools.nextElementSibling.querySelectorAll(".ledger-row.has-more")];
-    tools.hidden = rows.length === 0;
+    tools.querySelector(".ledger-all").hidden = rows.length === 0;
     const allOpen = rows.length > 0 && rows.every((r) => r.classList.contains("is-open"));
     tools.querySelector(".ledger-all").textContent = allOpen ? T.closeAll : T.openAll;
   }

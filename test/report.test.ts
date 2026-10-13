@@ -16,7 +16,7 @@ describe("renderReport", () => {
 
   test("a list of '<name> — <number> <unit>' items becomes a ledger with bars against the largest value", () => {
     const r = render("- A. Camera — 4.5 人日 (revised)。Setup 0.5, tests 1\n- B. Selfie — 9 人日。Recording 1.5\n- C. Short — 2 人日\n");
-    expect(r.html).toContain('<ol class="ledger">');
+    expect(r.html).toContain('<ol class="ledger" data-max="9" data-unit="人日">');
     expect(r.html).toContain('<span class="ledger-num">4.5</span><span class="ledger-unit">人日</span>');
     expect(r.html).toContain('style="width:50.0%"');
     expect(r.html).toContain('style="width:100.0%"');

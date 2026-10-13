@@ -64,7 +64,9 @@ export function renderReport(markdown: string, options: { baseDir: string }): Re
             );
           })
           .join("\n");
-        return `<ol class="ledger">\n${rows}\n</ol>\n`;
+        const maxRow = ledger.find((row) => row.value === max);
+        const scale = maxRow === undefined ? "" : ` data-max="${escapeHtml(maxRow.num)}" data-unit="${escapeHtml(maxRow.unit)}"`;
+        return `<ol class="ledger"${scale}>\n${rows}\n</ol>\n`;
       },
 
       table(token) {
