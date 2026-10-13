@@ -158,18 +158,20 @@
     column-gap: 24px;
     align-items: start;
     margin: 0;
-    padding: 10px 8px;
+    padding: 7px 8px;
     border-bottom: 1px solid var(--line);
   }
   .ledger-row.has-more { cursor: pointer; }
   .ledger-row.has-more:hover { background: var(--hover); }
-  .ledger-value { display: grid; grid-template-columns: 2.6em 1fr; align-items: baseline; column-gap: 5px; }
-  .ledger-num { text-align: right; }
+  /* The number slot is sized in the number's own font, so "6.25" and "9" end at the same place and the units line up */
+  .ledger-value { display: grid; grid-template-columns: max-content 1fr; align-items: baseline; column-gap: 5px; }
+  .ledger-num { text-align: right; min-width: 2.3em; }
   .ledger-num { font-size: 20px; line-height: 1.3; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--accent); }
   .ledger-unit { font-size: 13px; color: var(--sub); }
   .ledger-value .bar { grid-column: 1 / -1; margin-top: 6px; }
-  .ledger-name { font-weight: 600; line-height: 1.6; padding-top: 2px; }
-  .ledger-body { line-height: 1.7; padding-top: 2px; }
+  .ledger-name { font-weight: 600; line-height: 1.55; padding-top: 2px; }
+  .ledger-body { line-height: 1.6; padding-top: 2px; }
+  .ledger-row:not(.is-open) .ledger-name,
   .ledger-row:not(.is-open) .ledger-text {
     display: -webkit-box;
     -webkit-box-orient: vertical;
@@ -612,9 +614,10 @@ function measureRows() {
   for (const row of document.querySelectorAll(".ledger-row")) {
     const text = row.querySelector(".ledger-text");
     if (!text) continue;
+    const name = row.querySelector(".ledger-name");
     const wasOpen = row.classList.contains("is-open");
     row.classList.remove("is-open");
-    const clipped = text.scrollHeight > text.clientHeight + 1;
+    const clipped = text.scrollHeight > text.clientHeight + 1 || name.scrollHeight > name.clientHeight + 1;
     if (wasOpen) row.classList.add("is-open");
     row.classList.toggle("has-more", clipped);
     row.querySelector(".ledger-more")?.setAttribute("aria-label", wasOpen ? T.less : T.more);
