@@ -69,3 +69,7 @@ Conversations are kept in `~/.reportboard/threads/` (one file per report, named 
 ## Language
 
 Window and messages are in Japanese or English: `--lang ja|en` > `REPORTBOARD_LANG` > the first language in macOS System Settings.
+
+## Known limitations
+
+- If the same report is open in two named windows and you start a conversation on the same heading in both before either has seen the other's, two conversations are created for that heading and the window shows only one of them. The other is still saved in `~/.reportboard/threads/`

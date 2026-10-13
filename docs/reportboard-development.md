@@ -7,7 +7,7 @@ Notes for changing the window itself. For usage, see [reportboard.md](reportboar
 - `reportboard.ts`: the launcher, the window process (`--window`), `wait` and `reply`
 - `reportboard.html`: the page (HTML/CSS/JS, no external dependencies). It receives rendered HTML; it does not parse Markdown
 - `lib/report.ts`: Markdown → HTML with `marked`, including the breakdown lists, numeric columns and quantities. Tested in `test/report.test.ts`
-- `lib/threads.ts`: conversations per section, stored in `~/.reportboard/threads/`
+- `lib/threads.ts`: conversations per section, stored in `~/.reportboard/threads/`. Every change to a threads file happens under `<file>.lock` (a directory), so the window and `reply` writing at once lose nothing (`test/concurrency.test.ts`)
 - `lib/outbox.ts`, `lib/windows.ts`, `lib/lang.ts`: shared with textboard (and moodboard for the last two)
 - `scripts/preview-report.ts`: writes the page with a report baked in, for checking in a browser
 

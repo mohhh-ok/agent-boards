@@ -77,7 +77,15 @@ export function createWindowHost(options: WindowHostOptions) {
         return true;
       } catch (error) {
         if (!isErrorCode(error, "EEXIST")) throw error;
-        if (Date.now() - statSync(path).mtimeMs > LOCK_WAIT_MS) rmSync(path, { recursive: true, force: true });
+        let lockedAt: number;
+        try {
+          lockedAt = statSync(path).mtimeMs;
+        } catch (statError) {
+          // The holder released it between our mkdir and stat: try again right away
+          if (isErrorCode(statError, "ENOENT")) continue;
+          throw statError;
+        }
+        if (Date.now() - lockedAt > LOCK_WAIT_MS) rmSync(path, { recursive: true, force: true });
         await Bun.sleep(ACK_POLL_MS);
       }
     }
