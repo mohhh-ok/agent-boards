@@ -12,8 +12,9 @@ import { isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 export type Heading = { id: string; text: string };
-// h2 and h3: the places a conversation with the AI can be started (lib/threads.ts)
-export type ReportSection = { id: string; level: number; text: string; occurrence: number };
+// The places a conversation with the AI can be started (lib/threads.ts): h2 and h3, and the rows of a ledger. A row
+// carries the heading it is under (level 0 and "" before the first one) and its own name
+export type ReportSection = { id: string; level: number; text: string; occurrence: number; row?: { name: string; occurrence: number } };
 export type RenderedReport = { title: string | null; html: string; headings: Heading[]; sections: ReportSection[] };
 
 // "A. カメラ本人認証 (`identity-verification.md`) — 4.5 人日 (…)。AWS の用意 …"
@@ -41,7 +42,7 @@ export function renderReport(markdown: string, options: { baseDir: string }): Re
         }
         if (depth === 2 || depth === 3) {
           const id = `section-${sections.length + 1}`;
-          const occurrence = sections.filter((s) => s.level === depth && s.text === text).length;
+          const occurrence = sections.filter((s) => s.row === undefined && s.level === depth && s.text === text).length;
           sections.push({ id, level: depth, text, occurrence });
           if (depth === 2) headings.push({ id, text });
           return `<h${depth} id="${id}" class="section-heading">${inner}</h${depth}>\n`;
@@ -53,10 +54,15 @@ export function renderReport(markdown: string, options: { baseDir: string }): Re
         const ledger = inLedger ? null : ledgerOf(token);
         if (ledger === null) return false;
         const max = Math.max(...ledger.map((row) => row.value));
+        const under = sections.findLast((s) => s.row === undefined) ?? { level: 0, text: "", occurrence: 0 };
         const rows = ledger
           .map((row) => {
             const ratio = max > 0 ? row.value / max : 0;
             const name = this.parser.parseInline(Lexer.lexInline(row.name));
+            const id = `row-${sections.length + 1}`;
+            const rowName = plainText(name);
+            const rowOccurrence = sections.filter((s) => s.row?.name === rowName && s.level === under.level && s.text === under.text && s.occurrence === under.occurrence).length;
+            sections.push({ id, level: under.level, text: under.text, occurrence: under.occurrence, row: { name: rowName, occurrence: rowOccurrence } });
             const rest = row.rest.trim();
             inLedger = true;
             const lead = rest === "" ? "" : this.parser.parseInline(Lexer.lexInline(rest));
@@ -64,7 +70,7 @@ export function renderReport(markdown: string, options: { baseDir: string }): Re
             inLedger = false;
             const body = details === "" ? "" : `<div class="ledger-body">${details}</div>`;
             return (
-              `<li class="ledger-row${body === "" ? " is-short" : ""}">` +
+              `<li id="${id}" class="ledger-row${body === "" ? " is-short" : ""}">` +
               `<div class="ledger-value"><span class="ledger-num">${escapeHtml(row.num)}</span>` +
               (row.unit === "" ? "" : `<span class="ledger-unit">${escapeHtml(row.unit)}</span>`) +
               `<span class="bar" aria-hidden="true"><span style="width:${(ratio * 100).toFixed(1)}%"></span></span></div>` +

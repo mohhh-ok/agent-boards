@@ -49,7 +49,7 @@ window.__reportboardSend = async ({ threadId, section, text }) => {
   const sections = (await window.__reportboardLoad()).sections;
   let thread = window.__previewThreads.find((t) => t.id === threadId);
   if (!thread) {
-    const placed = sections.find((s) => s.level === section.level && s.text === section.text && s.occurrence === section.occurrence);
+    const placed = sections.find((s) => s.id === section.id);
     thread = { id: "t-" + Math.random().toString(16).slice(2, 10), heading: section, messages: [], sectionId: placed ? placed.id : null };
     window.__previewThreads.push(thread);
   }

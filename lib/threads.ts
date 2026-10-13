@@ -2,15 +2,17 @@
 // Stored in <home>/threads/<sha256 of the report's absolute path>.json, never next to the report, so the user's
 // repository gets no extra files. They survive replacing the window and reloading the file.
 //
-// A thread remembers the heading it was started on (level, text, and which occurrence of that text). On every render
-// it is attached to the heading that still matches; a thread whose heading is gone is shown at the end of the report
+// A thread remembers the heading it was started on (level, text, and which occurrence of that text), and the ledger row
+// when it was started on one. On every render it is attached to the place that still matches; a thread whose place is
+// gone is shown at the end of the report
 // (docs/design.md "セクションごとに AI とやり取りする").
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 
 export type ThreadMessage = { from: "user" | "ai"; text: string; at: string };
-export type SectionRef = { level: number; text: string; occurrence: number };
+export type RowRef = { name: string; occurrence: number };
+export type SectionRef = { level: number; text: string; occurrence: number; row?: RowRef };
 export type Thread = { id: string; heading: SectionRef; messages: ThreadMessage[] };
 export type ThreadFile = { file: string; threads: Thread[] };
 // A section of the rendered report a thread can sit on
@@ -47,8 +49,9 @@ function addUserMessageLocked(params: { home: string; reportPath: string; thread
   const data = readThreads(params.home, params.reportPath);
   let thread = params.threadId === null ? undefined : data.threads.find((t) => t.id === params.threadId);
   if (thread === undefined) {
-    const { level, text, occurrence } = params.section;
-    thread = { id: `t-${randomUUID().replaceAll("-", "").slice(0, 12)}`, heading: { level, text, occurrence }, messages: [] };
+    const { level, text, occurrence, row } = params.section;
+    const heading: SectionRef = row === undefined ? { level, text, occurrence } : { level, text, occurrence, row: { name: row.name, occurrence: row.occurrence } };
+    thread = { id: `t-${randomUUID().replaceAll("-", "").slice(0, 12)}`, heading, messages: [] };
     data.threads.push(thread);
   }
   thread.messages.push({ from: "user", text: params.text, at: (params.now ?? new Date()).toISOString() });
@@ -82,7 +85,12 @@ export function addReply(params: { home: string; threadId: string; text: string;
 export function placeThreads(threads: Thread[], sections: Section[]): Array<Thread & { sectionId: string | null }> {
   return threads.map((thread) => {
     const section = sections.find(
-      (s) => s.level === thread.heading.level && s.text === thread.heading.text && s.occurrence === thread.heading.occurrence,
+      (s) =>
+        s.level === thread.heading.level &&
+        s.text === thread.heading.text &&
+        s.occurrence === thread.heading.occurrence &&
+        s.row?.name === thread.heading.row?.name &&
+        s.row?.occurrence === thread.heading.row?.occurrence,
     );
     return { ...thread, sectionId: section?.id ?? null };
   });

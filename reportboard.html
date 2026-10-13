@@ -129,6 +129,8 @@
     background: var(--code-bg);
     border-radius: 4px;
     padding: 1px 5px;
+    /* Long paths break instead of pushing the page sideways on a narrow window */
+    overflow-wrap: anywhere;
   }
   .report pre { background: var(--code-bg); padding: 12px 14px; border-radius: 6px; overflow-x: auto; line-height: 1.55; }
   .report pre code { background: none; padding: 0; font-size: 13px; }
@@ -155,6 +157,8 @@
   /* ---- ledger: "<name> — <number> <unit>. details" lists ---- */
   .ledger-tools { scroll-margin-top: 56px; display: flex; justify-content: space-between; align-items: baseline; gap: 16px; margin: -6px 0 4px; }
   .ledger-scale { font-size: 14px; color: var(--text); }
+  .ledger-scale .qty { font-weight: inherit; }
+  .ledger-all { white-space: nowrap; }
   .text-button {
     font: inherit; font-size: 13px; color: var(--accent);
     background: none; border: 0; padding: 2px 0; cursor: pointer;
@@ -212,6 +216,11 @@
   .ledger-row.is-open .ledger-more::before { transform: rotate(-135deg); margin-top: 11px; }
   .ledger-row.has-more:hover .ledger-more { color: var(--accent); }
   .ledger-row:not(.has-more) .ledger-more { visibility: hidden; }
+  /* "Edit with AI" on a row: under its details, seen when the row is open. The conversation spans the row */
+  .ledger-body > .edit-with-ai { display: block; margin-top: 6px; }
+  .ledger-row:not(.is-open) > .ledger-body > .edit-with-ai,
+  .ledger-row:not(.is-open) > .thread { display: none; }
+  .ledger-row > .thread { grid-column: 1 / -1; margin: 10px 0 4px; cursor: auto; }
   @media (max-width: 860px) {
     .ledger-row { grid-template-columns: 6.5em minmax(0, 1fr) 20px; }
     .ledger-body { grid-column: 2; }
@@ -278,6 +287,12 @@
   @media (prefers-color-scheme: dark) { .send-button { color: #10131a; } }
   .send-button:disabled { opacity: 0.5; cursor: default; }
   .composer-status { grid-column: 1 / -1; font-size: 13px; color: var(--sub); }
+  /* A phone: the box takes the whole width and the send button goes under it */
+  @media (max-width: 560px) {
+    .composer { grid-template-columns: minmax(0, 1fr); }
+    .composer textarea { min-height: 5.6em; }
+    .send-button { justify-self: end; }
+  }
   .composer-status.is-error { color: var(--warn); }
   .orphans h2 { display: block; }
 
@@ -323,6 +338,7 @@ const STRINGS = {
     you: "あなた",
     ai: "AI",
     placeholder: "このセクションの直し方か、聞きたいことを書く（例: 表に合計の行を足して）。Enter で送る、Shift+Enter で改行",
+    rowPlaceholder: "この項目の直し方か、聞きたいことを書く（例: テストを 0.5 人日に減らして）。Enter で送る、Shift+Enter で改行",
     send: "送る",
     sending: "送っています…",
     waiting: "AI が受け取り待ちです。送るとすぐ届きます",
@@ -352,6 +368,7 @@ const STRINGS = {
     you: "You",
     ai: "AI",
     placeholder: "Say how to change this section, or ask about it (e.g. add a total row to the table). Enter to send, Shift+Enter for a new line",
+    rowPlaceholder: "Say how to change this item, or ask about it (e.g. cut the tests to 0.5 days). Enter to send, Shift+Enter for a new line",
     send: "Send",
     sending: "Sending…",
     waiting: "The AI is waiting. What you send reaches it right away",
@@ -430,7 +447,14 @@ function render(report, { keepOpen }) {
     tools.className = "ledger-tools";
     const scale = document.createElement("span");
     scale.className = "ledger-scale";
-    if (ledger.dataset.max) scale.textContent = T.barScale(`${ledger.dataset.max} ${ledger.dataset.unit}`.trim());
+    if (ledger.dataset.max) {
+      // The largest value and its unit stay on one line
+      const [before, after = ""] = T.barScale("\u0000").split("\u0000");
+      const qty = document.createElement("span");
+      qty.className = "qty";
+      qty.textContent = `${ledger.dataset.max} ${ledger.dataset.unit}`.trim();
+      scale.append(before, qty, after);
+    }
     const all = document.createElement("button");
     all.type = "button";
     all.className = "text-button ledger-all";
@@ -458,12 +482,36 @@ const sentAwaiting = new Set();
 const seenPanels = new Set();
 
 function panelKey(section) {
-  return `h${section.level}:${section.occurrence}:${section.text}`;
+  const key = `h${section.level}:${section.occurrence}:${section.text}`;
+  return section.row ? `${key}|row:${section.row.occurrence}:${section.row.name}` : key;
+}
+
+function makeAskButton(key) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "edit-with-ai";
+  button.dataset.key = key;
+  return button;
 }
 
 function buildThreadPanels() {
   document.getElementById("orphans")?.remove();
   for (const section of sections) {
+    if (section.row) {
+      // A breakdown row: the button closes its details, and the conversation takes the width of the row
+      const row = document.getElementById(section.id);
+      if (!row || !canTalk) continue;
+      let body = row.querySelector(".ledger-body");
+      if (!body) {
+        body = document.createElement("div");
+        body.className = "ledger-body";
+        row.querySelector(".ledger-name").after(body);
+      }
+      const key = panelKey(section);
+      body.append(makeAskButton(key));
+      row.append(makePanel({ key, section, threadId: null }));
+      continue;
+    }
     const heading = document.getElementById(section.id);
     if (!heading) continue;
     // The heading is a flex row; its text stays one item whether or not the button is added
@@ -472,11 +520,7 @@ function buildThreadPanels() {
     text.append(...heading.childNodes);
     heading.append(text);
     if (!canTalk) continue;
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "edit-with-ai";
-    button.dataset.section = section.id;
-    heading.append(button);
+    heading.append(makeAskButton(panelKey(section)));
     heading.after(makePanel({ key: panelKey(section), section, threadId: null }));
   }
 }
@@ -498,7 +542,7 @@ function makePanel({ key, section, threadId, origin }) {
   composer.className = "composer";
   const box = document.createElement("textarea");
   box.rows = 1;
-  box.placeholder = T.placeholder;
+  box.placeholder = section.row ? T.rowPlaceholder : T.placeholder;
   box.value = drafts.get(key) ?? "";
   box.addEventListener("input", () => drafts.set(key, box.value));
   box.addEventListener("keydown", (event) => {
@@ -581,7 +625,8 @@ function renderThreads(next) {
       let panel = box.querySelector(`.thread[data-key="${CSS.escape(key)}"]`);
       if (!panel) {
         openPanels.add(key);
-        panel = makePanel({ key, section: thread.heading, threadId: thread.id, origin: thread.heading.text });
+        const origin = thread.heading.row ? `${thread.heading.text} › ${thread.heading.row.name}` : thread.heading.text;
+        panel = makePanel({ key, section: thread.heading, threadId: thread.id, origin });
         box.append(panel);
       }
       fillPanel(panel, thread);
@@ -599,6 +644,8 @@ function fillPanel(panel, thread) {
     // A section that already has a conversation shows it, once; after that the user decides
     openPanels.add(key);
     seenPanels.add(key);
+    const row = panel.closest(".ledger-row");
+    if (row) setRowOpen(row, true);
   }
   panel.hidden = !openPanels.has(key);
   const list = panel.querySelector(".thread-messages");
@@ -622,7 +669,7 @@ function fillPanel(panel, thread) {
     }),
   );
   list.scrollTop = list.scrollHeight;
-  const button = document.querySelector(`.edit-with-ai[data-section="${panel.previousElementSibling?.id ?? ""}"]`);
+  const button = document.querySelector(`.edit-with-ai[data-key="${CSS.escape(key)}"]`);
   if (button) button.textContent = panel.hidden ? (messages.length > 0 ? T.conversation(messages.length) : T.ask) : T.hideConversation;
 }
 
@@ -637,8 +684,8 @@ function updateWaiting() {
 document.addEventListener("click", (event) => {
   const button = event.target.closest(".edit-with-ai");
   if (!button) return;
-  const panel = document.getElementById(button.dataset.section)?.nextElementSibling;
-  if (!panel?.classList.contains("thread")) return;
+  const panel = document.querySelector(`.thread[data-key="${CSS.escape(button.dataset.key)}"]`);
+  if (!panel) return;
   const key = panel.dataset.key;
   if (openPanels.has(key)) openPanels.delete(key);
   else openPanels.add(key);
@@ -650,13 +697,22 @@ document.addEventListener("click", (event) => {
 function measureRows() {
   for (const row of document.querySelectorAll(".ledger-row")) {
     const text = row.querySelector(".ledger-text");
-    if (!text) continue;
     const name = row.querySelector(".ledger-name");
     const wasOpen = row.classList.contains("is-open");
     row.classList.remove("is-open");
-    const clipped = text.scrollHeight > text.clientHeight + 1 || name.scrollHeight > name.clientHeight + 1;
+    const clipped = (text !== null && text.scrollHeight > text.clientHeight + 1) || name.scrollHeight > name.clientHeight + 1;
     if (wasOpen) row.classList.add("is-open");
-    row.classList.toggle("has-more", clipped);
+    // A row with "Edit with AI" opens to show the button even when its details fit
+    const canOpen = clipped || row.querySelector(".edit-with-ai") !== null;
+    if (!canOpen && wasOpen) row.classList.remove("is-open");
+    row.classList.toggle("has-more", canOpen);
+    if (!row.querySelector(".ledger-more")) {
+      if (!canOpen) continue;
+      const more = document.createElement("button");
+      more.type = "button";
+      more.className = "ledger-more";
+      row.querySelector(".ledger-body").after(more);
+    }
     row.querySelector(".ledger-more")?.setAttribute("aria-label", wasOpen ? T.less : T.more);
   }
   for (const tools of document.querySelectorAll(".ledger-tools")) {
@@ -690,6 +746,8 @@ document.addEventListener("click", (event) => {
     measureRows();
     return;
   }
+  // The button and the conversation inside a row do not open or close it
+  if (event.target.closest(".edit-with-ai, .thread")) return;
   const row = event.target.closest(".ledger-row.has-more");
   // Selecting text inside a row should not toggle it
   if (row && String(window.getSelection()).length === 0) {
@@ -735,10 +793,17 @@ function blocksNow() {
   return [...$report.querySelectorAll(BLOCKS)].filter((el) => !el.closest(".thread") && !el.closest("thead"));
 }
 
+// The report's own text: the buttons and conversation boxes inside a heading or a breakdown row are left out
+function blockText(el) {
+  const copy = el.cloneNode(true);
+  for (const extra of copy.querySelectorAll(".edit-with-ai, .thread, .ledger-more")) extra.remove();
+  return copy.textContent.replace(/\s+/g, " ").trim();
+}
+
 function blockTexts() {
   const counts = new Map();
   for (const el of blocksNow()) {
-    const key = el.textContent.replace(/\s+/g, " ").trim();
+    const key = blockText(el);
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   return counts;
@@ -749,7 +814,7 @@ function markChanges(before) {
   changeIndex = 0;
   const found = [];
   for (const el of blocksNow()) {
-    const key = el.textContent.replace(/\s+/g, " ").trim();
+    const key = blockText(el);
     const left = before.get(key) ?? 0;
     if (left > 0) before.set(key, left - 1);
     else found.push(el);

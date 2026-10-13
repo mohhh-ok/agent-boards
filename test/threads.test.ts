@@ -54,6 +54,22 @@ describe("threads", () => {
     expect(placeThreads([thread], sections)[0].sectionId).toBe("section-3");
     expect(placeThreads([thread], sections.slice(0, 2))[0].sectionId).toBeNull();
   });
+
+  test("a thread started on a breakdown row keeps the row and follows it, not the heading", () => {
+    const row = { level: 2, text: "内訳", occurrence: 0, row: { name: "A. カメラ本人認証", occurrence: 0 } };
+    const thread = addUserMessage({ home: dir, reportPath: report, threadId: null, section: { ...row, id: "row-4" } as typeof row, text: "q" });
+    expect(thread.heading).toEqual(row);
+    const sections = [
+      { id: "section-1", level: 2, text: "内訳", occurrence: 0 },
+      { id: "row-2", level: 2, text: "内訳", occurrence: 0, row: { name: "B", occurrence: 0 } },
+      { id: "row-3", level: 2, text: "内訳", occurrence: 0, row: { name: "A. カメラ本人認証", occurrence: 0 } },
+    ];
+    expect(placeThreads([thread], sections)[0].sectionId).toBe("row-3");
+    expect(placeThreads([thread], sections.slice(0, 2))[0].sectionId).toBeNull();
+    // A thread on the heading is not placed on its rows
+    const onHeading = { id: "t-2", heading: { level: 2, text: "内訳", occurrence: 0 }, messages: [] };
+    expect(placeThreads([onHeading], sections)[0].sectionId).toBe("section-1");
+  });
 });
 
 describe("outbox", () => {

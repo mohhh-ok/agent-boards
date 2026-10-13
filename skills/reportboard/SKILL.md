@@ -33,7 +33,7 @@ reportboard --target <name> <file.md>; echo "rc=$?"
 
 ## Writing the report so it reads well
 
-- Put the conclusion right under the `#` title. Use `##` for sections (they become the contents) and `###` inside them. Every `##`/`###` gets an "Edit with AI" button, so make headings name what the section is about
+- Put the conclusion right under the `#` title. Use `##` for sections (they become the contents) and `###` inside them. Every `##`/`###` and every breakdown row gets an "Edit with AI" button, so make headings and row names say what they are about
 - For a breakdown of effort, cost or time, write one item per line as `- <name> — <number> <unit>` with the same unit on every line. It is shown with the number first and a bar, so the heavy items stand out. Under each item, write what it is made of as a nested list, one piece of work per line, and its assumptions and notes as a `>` quote. Do not run the pieces together in one sentence: the details are shown as written, and one long line is hard to read
 
   ```md
@@ -59,6 +59,7 @@ reportboard --target <name> <file.md>; echo "rc=$?"
 ```
 
 - `thread.messages` is the whole conversation in that section (user and your past replies). Read it before editing or answering
+- `section.row` is there when it was sent from a row of a breakdown (each row has its own button): `{ "level": 2, "heading": "内訳", "row": "A. カメラ本人認証 (identity-verification.md)" }`. The message is about that item — the line starting with that name under that heading, and what is nested under it. Change that item; when its number changes, check the total and anything else that adds it up
 - rc: 0 = got one / 1 = the window is not open / 2 = `--timeout` passed / 3 = the user closed the window (stop waiting)
 - The reply is plain text shown in the section. Keep it short. After an edit, say which part changed and how; for a question, answer it
 

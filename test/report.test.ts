@@ -22,7 +22,23 @@ describe("renderReport", () => {
     expect(r.html).toContain('style="width:100.0%"');
     expect(r.html).toContain('<div class="ledger-name">A. Camera</div><div class="ledger-body">(revised)。Setup 0.5, tests 1</div>');
     expect(r.html).toContain('<div class="ledger-name">B. Selfie</div><div class="ledger-body">Recording 1.5</div>');
-    expect(r.html).toContain('<li class="ledger-row is-short">');
+    expect(r.html).toContain('<li id="row-3" class="ledger-row is-short">');
+  });
+
+  test("each ledger row is a place for a conversation, under the heading it sits in", () => {
+    const r = render("# T\n\n- X — 1 人日\n- Y — 2 人日\n\n## 内訳\n\n- A. `cam` — 1 人日\n- A. `cam` — 2 人日\n\n## 内訳\n\n- A. `cam` — 3 人日\n- B — 4 人日\n");
+    expect(r.sections).toEqual([
+      { id: "row-1", level: 0, text: "", occurrence: 0, row: { name: "X", occurrence: 0 } },
+      { id: "row-2", level: 0, text: "", occurrence: 0, row: { name: "Y", occurrence: 0 } },
+      { id: "section-3", level: 2, text: "内訳", occurrence: 0 },
+      { id: "row-4", level: 2, text: "内訳", occurrence: 0, row: { name: "A. cam", occurrence: 0 } },
+      { id: "row-5", level: 2, text: "内訳", occurrence: 0, row: { name: "A. cam", occurrence: 1 } },
+      { id: "section-6", level: 2, text: "内訳", occurrence: 1 },
+      { id: "row-7", level: 2, text: "内訳", occurrence: 1, row: { name: "A. cam", occurrence: 0 } },
+      { id: "row-8", level: 2, text: "内訳", occurrence: 1, row: { name: "B", occurrence: 0 } },
+    ]);
+    expect(r.headings.map((h) => h.id)).toEqual(["section-3", "section-6"]);
+    expect(r.html).toContain('<li id="row-4" class="ledger-row is-short">');
   });
 
   test("a nested list and notes under a ledger item are its details; the nested list stays a plain list", () => {

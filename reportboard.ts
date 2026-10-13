@@ -13,7 +13,7 @@
 // __reportboardPoll every 500 ms; when the file changed on disk, the poll returns the new rendering, so the window
 // follows the file as the agent rewrites it. Named windows, locks and acks are shared with the other commands (lib/windows.ts).
 //
-// Conversations: each h2 / h3 of a named window has a button. What the user sends is appended to the section's thread
+// Conversations: each h2 / h3 and each breakdown row of a named window has a button. What the user sends is appended to the section's thread
 // (lib/threads.ts, kept in ~/.reportboard) and queued in the outbox for `wait` (lib/outbox.ts, shared with textboard).
 //
 // Exit codes of opening: 0 = shown / 1 = bad arguments or path / 2 = not shown in time / 3 = the window opened but could not read the report
@@ -289,7 +289,11 @@ function runWindow(config: WindowConfig) {
       const thread = addUserMessage({ home: HOME, reportPath: currentPath, threadId: payload.threadId, section: payload.section, text: payload.text });
       outbox.send(config.target, {
         file: currentPath,
-        section: { level: thread.heading.level, heading: thread.heading.text },
+        section: {
+          level: thread.heading.level,
+          heading: thread.heading.text,
+          ...(thread.heading.row === undefined ? {} : { row: thread.heading.row.name }),
+        },
         thread: { id: thread.id, messages: thread.messages },
         instruction: payload.text,
         reply: `reportboard reply --thread ${thread.id} --file <path>`,

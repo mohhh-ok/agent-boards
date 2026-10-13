@@ -45,6 +45,8 @@ The look is fixed by reportboard; the Markdown only says what is in the report. 
 
 In a named window, every `##` and `###` heading has an "Edit with AI" button. It opens a box under the heading: write how the section should change ("add a total row", "shorten this") or a question, and press Enter (Shift+Enter for a new line). When you ask for a change, the agent edits the Markdown, the window reloads it, and the agent's reply in the same box says what it changed. A question gets an answer there. You can keep going in the same box. A section that already has a conversation shows it when the report opens.
 
+Each row of a breakdown has its own "Edit with AI" too, under its details when the row is open (a row with short details still opens, to show the button). Its box spans the row, and pressing the button or typing in the box does not close the row. What you send there is about that item ("cut the tests to 0.5", "why is this 4.5?").
+
 On the agent's side:
 
 ```sh
@@ -67,7 +69,13 @@ reportboard reply --thread <id> "answer"        # or: --file <path>
 }
 ```
 
-`thread.messages` holds the whole conversation of that section, including this message. Exit codes of `wait`: 0 = got one / 1 = the window is not open / 2 = `--timeout` passed / 3 = the window was closed. Messages sent while nobody waits are kept for the next `wait`, and the box tells you whether the AI is waiting.
+`thread.messages` holds the whole conversation of that section, including this message. When it was sent from a breakdown row, `section` also has `row`: the row's name as shown (code marks dropped), under the heading in `heading` (`level` 0 and `heading` "" when the breakdown is above every heading):
+
+```json
+"section": { "level": 2, "heading": "内訳", "row": "A. カメラ本人認証 (identity-verification.md)" }
+```
+
+ Exit codes of `wait`: 0 = got one / 1 = the window is not open / 2 = `--timeout` passed / 3 = the window was closed. Messages sent while nobody waits are kept for the next `wait`, and the box tells you whether the AI is waiting.
 
 The agent edits the report when the message asks for a change and answers when it asks a question; either way it replies in the thread, saying what it changed.
 
