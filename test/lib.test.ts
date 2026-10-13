@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { applyLang, createI18n, langFromAppleLanguages } from "../lib/lang.ts";
 import { STALE_FILE_MS, createWindowHost, isValidTargetName } from "../lib/windows.ts";
 
@@ -114,6 +114,66 @@ describe("windows", () => {
     writeFileSync(host.pidPath("t"), String(process.pid));
     expect(host.findWindowPid("t")).toBeNull();
     expect(existsSync(host.pidPath("t"))).toBe(false);
+  });
+
+  // A window started by another copy of the command (a global install while the host runs from a checkout, or the
+  // other way round): the same file name in another directory, running with --window and a target
+  async function startOtherCopyWindow(target: string) {
+    const script = join(dir, "other-install", "testboard.ts");
+    mkdirSync(dirname(script), { recursive: true });
+    writeFileSync(script, "setTimeout(() => {}, 60_000);\n");
+    const child = Bun.spawn([process.execPath, script, "--window", JSON.stringify({ target, url: "file:///x" })], { stdio: ["ignore", "ignore", "ignore"] });
+    // Until ps shows the arguments
+    for (let i = 0; i < 50; i++) {
+      const ps = Bun.spawnSync(["ps", "-ww", "-p", String(child.pid), "-o", "args="]);
+      if (ps.stdout.toString().includes("--window")) break;
+      await Bun.sleep(20);
+    }
+    return child;
+  }
+  const uniqueName = () => `t-${process.pid}-${Math.random().toString(16).slice(2, 8)}`;
+
+  test("a window started by another copy of the command keeps its pid file", async () => {
+    const target = uniqueName();
+    const child = await startOtherCopyWindow(target);
+    try {
+      writeFileSync(host.pidPath(target), String(child.pid));
+      expect(host.findWindowPid(target)).toBe(child.pid);
+      expect(readFileSync(host.pidPath(target), "utf8")).toBe(String(child.pid));
+    } finally {
+      child.kill();
+    }
+  });
+
+  test("a running window whose pid file is gone is found again, so the same name is not opened twice", async () => {
+    const target = uniqueName();
+    const child = await startOtherCopyWindow(target);
+    const printed: string[] = [];
+    const log = console.log;
+    console.log = (line: string) => printed.push(line);
+    try {
+      expect(existsSync(host.pidPath(target))).toBe(false);
+      host.listTargets();
+      expect(printed).toContain(`${target}\tpid=${child.pid}`);
+      rmSync(host.pidPath(target), { force: true });
+      expect(host.findWindowPid(target)).toBe(child.pid);
+      expect(readFileSync(host.pidPath(target), "utf8")).toBe(String(child.pid));
+      // Another name is not taken for this one
+      expect(host.findWindowPid(`${target}-other`)).toBeNull();
+    } finally {
+      console.log = log;
+      child.kill();
+    }
+  });
+
+  test("a pid file whose window has exited is deleted", async () => {
+    const target = uniqueName();
+    const child = await startOtherCopyWindow(target);
+    writeFileSync(host.pidPath(target), String(child.pid));
+    child.kill();
+    await child.exited;
+    expect(host.findWindowPid(target)).toBeNull();
+    expect(existsSync(host.pidPath(target))).toBe(false);
   });
 
   test("ack is written by the window and read once by the launcher", async () => {

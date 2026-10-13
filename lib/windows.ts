@@ -8,7 +8,7 @@
 // Each command keeps its own state directory (/tmp/<command>-<uid>/), so commands never see each other's windows.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { Lang } from "./lang.ts";
 
 export const READY_TIMEOUT_MS = 20_000;
@@ -24,8 +24,10 @@ export type ReplaceRequest = { requestId: string; url: string; pid: number };
 export type WindowHostOptions = {
   // Command name. Used for the state directory and messages
   name: string;
-  // The command's entry file. The window process is started as `<scriptPath> --window <config>`, and a pid is only
-  // trusted while its process still runs that file for that target
+  // The command's entry file. The window process is started as `<scriptPath> --window <config>`. A process counts as
+  // this command's window for a name when it runs a file of the same name with --window and that target, whichever copy
+  // of the command started it: a global install and a checkout share the state directory, and each must see the
+  // other's windows (or it would forget them and open a second window under the same name)
   scriptPath: string;
   htmlPath: string;
   // Extra directories under the state directory (textboard's outbox)
@@ -120,17 +122,51 @@ export function createWindowHost(options: WindowHostOptions) {
     return Number.isInteger(pid) && pid > 0 ? pid : null;
   }
 
-  // Check that the process in the pid file is still this command's window for that name. Delete stale pid files
+  const scriptName = basename(options.scriptPath);
+  const windowArgsPattern = new RegExp(`(?:^|[/\\s])${scriptName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} --window (\\{.*\\})$`);
+
+  // The target of the window this command line belongs to, or null when it is not one of this command's windows
+  function windowTargetOf(args: string): string | null {
+    const match = windowArgsPattern.exec(args.trim());
+    if (match === null) return null;
+    try {
+      const config = JSON.parse(match[1]) as { target?: unknown };
+      return typeof config.target === "string" ? config.target : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // Every running window of this command that has a name, oldest first (-ww: never cut a long command line)
+  function runningWindows(): Array<{ pid: number; target: string }> {
+    const ps = spawnSync("ps", ["-axww", "-o", "pid=,args="], { encoding: "utf8" });
+    if (ps.status !== 0) return [];
+    const found: Array<{ pid: number; target: string }> = [];
+    for (const line of ps.stdout.split("\n")) {
+      const match = /^\s*(\d+)\s+(.*)$/.exec(line);
+      if (match === null) continue;
+      const target = windowTargetOf(match[2]);
+      if (target !== null) found.push({ pid: Number(match[1]), target });
+    }
+    return found.sort((a, b) => a.pid - b.pid);
+  }
+
+  // The window for that name. The pid file is checked first; when it is missing or names another process, the running
+  // processes are searched too, and the pid file is written again for a window found that way. Only when no window
+  // runs is the pid file deleted
   function findWindowPid(target: string): number | null {
-    const pid = readPid(target);
-    if (pid === null) return null;
-    const ps = spawnSync("ps", ["-p", String(pid), "-o", "args="], { encoding: "utf8" });
-    const args = ps.stdout.trim();
-    // A pid may have been reused by a window of another name, so match the target in its arguments too
-    const isThisTarget = args.includes(options.scriptPath) && args.includes("--window") && args.includes(`"target":"${target}"`);
-    if (ps.status === 0 && isThisTarget) return pid;
-    rmSync(pidPath(target), { force: true });
-    return null;
+    const recorded = readPid(target);
+    if (recorded !== null) {
+      const ps = spawnSync("ps", ["-ww", "-p", String(recorded), "-o", "args="], { encoding: "utf8" });
+      if (ps.status === 0 && windowTargetOf(ps.stdout) === target) return recorded;
+    }
+    const running = runningWindows().find((w) => w.target === target);
+    if (running === undefined) {
+      rmSync(pidPath(target), { force: true });
+      return null;
+    }
+    writeFileSync(pidPath(target), String(running.pid));
+    return running.pid;
   }
 
   function closeTarget(target: string, notOpen: (target: string) => string): number {
@@ -150,10 +186,11 @@ export function createWindowHost(options: WindowHostOptions) {
     return 0;
   }
 
+  // The names in the pid files and those of the running windows, so a window whose pid file was lost is listed too
   function listTargets(): void {
-    for (const file of readdirSync(targetsDir)) {
-      if (!file.endsWith(".pid")) continue;
-      const target = file.slice(0, -".pid".length);
+    const targets = new Set(runningWindows().map((w) => w.target));
+    for (const file of readdirSync(targetsDir)) if (file.endsWith(".pid")) targets.add(file.slice(0, -".pid".length));
+    for (const target of [...targets].sort()) {
       const pid = findWindowPid(target);
       if (pid !== null) console.log(`${target}\tpid=${pid}`);
     }
