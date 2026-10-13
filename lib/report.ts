@@ -2,11 +2,12 @@
 //
 // Rules beyond plain GFM (docs/reportboard.md "How the report is laid out"):
 // - Ledger: a list where every item starts with "<name> — <number> <unit>" (two items or more, one unit) is shown as rows
-//   of value, bar, name and details. The bar is the value against the largest value in the list
+//   of value, bar, name and details. The bar is the value against the largest value in the list. Blocks under an item
+//   (a nested list of the work, `>` notes) are part of its details; a list inside the details is a plain list
 // - Tables: a column whose cells are all numbers is right-aligned and gets the same bars
 // - Quantities with a unit (人日, %, 円 …) in running text are emphasized
 // - Raw HTML in the Markdown is shown as text, not run
-import { Lexer, Marked, type Tokens } from "marked";
+import { Lexer, Marked, type Token, type Tokens } from "marked";
 import { isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -26,6 +27,7 @@ export function renderReport(markdown: string, options: { baseDir: string }): Re
   const headings: Heading[] = [];
   const sections: ReportSection[] = [];
   let title: string | null = null;
+  let inLedger = false;
   const marked = new Marked({ gfm: true });
 
   marked.use({
@@ -48,7 +50,7 @@ export function renderReport(markdown: string, options: { baseDir: string }): Re
       },
 
       list(token) {
-        const ledger = ledgerOf(token);
+        const ledger = inLedger ? null : ledgerOf(token);
         if (ledger === null) return false;
         const max = Math.max(...ledger.map((row) => row.value));
         const rows = ledger
@@ -56,7 +58,11 @@ export function renderReport(markdown: string, options: { baseDir: string }): Re
             const ratio = max > 0 ? row.value / max : 0;
             const name = this.parser.parseInline(Lexer.lexInline(row.name));
             const rest = row.rest.trim();
-            const body = rest === "" ? "" : `<div class="ledger-body">${this.parser.parseInline(Lexer.lexInline(rest))}</div>`;
+            inLedger = true;
+            const lead = rest === "" ? "" : this.parser.parseInline(Lexer.lexInline(rest));
+            const details = row.blocks.length === 0 ? lead : (lead === "" ? "" : `<p>${lead}</p>`) + this.parser.parse(row.blocks);
+            inLedger = false;
+            const body = details === "" ? "" : `<div class="ledger-body">${details}</div>`;
             return (
               `<li class="ledger-row${body === "" ? " is-short" : ""}">` +
               `<div class="ledger-value"><span class="ledger-num">${escapeHtml(row.num)}</span>` +
@@ -124,19 +130,19 @@ export function renderReport(markdown: string, options: { baseDir: string }): Re
   return { title, html, headings, sections };
 }
 
-type LedgerRow = { name: string; num: string; unit: string; value: number; rest: string };
+type LedgerRow = { name: string; num: string; unit: string; value: number; rest: string; blocks: Token[] };
 
 function ledgerOf(list: Tokens.List): LedgerRow[] | null {
   if (list.items.length < 2) return null;
   const rows: LedgerRow[] = [];
   for (const item of list.items) {
-    // Only items made of one block of text (no nested lists or code)
-    const blocks = item.tokens.filter((t) => t.type !== "space");
-    if (item.task || blocks.length !== 1 || (blocks[0].type !== "text" && blocks[0].type !== "paragraph")) return null;
-    const match = LEDGER_ITEM.exec(item.text);
+    // The item starts with a block of text; what follows it (a nested list, notes) is shown under the details
+    const [head, ...blocks] = item.tokens.filter((t) => t.type !== "space");
+    if (item.task || head === undefined || (head.type !== "text" && head.type !== "paragraph")) return null;
+    const match = LEDGER_ITEM.exec((head as Tokens.Text | Tokens.Paragraph).text);
     if (match?.groups === undefined) return null;
     const { name, num, unit, rest } = match.groups;
-    rows.push({ name: name.trim(), num, unit, value: parseNumber(num), rest: rest.replace(/^\s*[。.]/, "") });
+    rows.push({ name: name.trim(), num, unit, value: parseNumber(num), rest: rest.replace(/^\s*[。.]/, ""), blocks });
   }
   const units = new Set(rows.map((row) => row.unit));
   return units.size === 1 ? rows : null;

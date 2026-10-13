@@ -22,9 +22,16 @@ The look is fixed by reportboard; the Markdown only says what is in the report. 
 - The first `#` heading is the title. `##` headings make the contents on the left of a wide window
 - A list where every item starts with `<name> — <number> <unit>` (two items or more, the same unit) is shown as a breakdown: the number first in large type, a bar showing it against the largest in the list, then the name and the details. Long details are cut to two lines; click the row to read the rest, or "Open all details" above the list
 
+  Text after the number on the first line, a nested list and `>` notes under an item are its details, shown as written (a nested list stays a plain list, without bars)
+
   ```md
-  - A. Camera check — 4.5 人日。Setup 0.5, adapter 0.5, …
-  - B. Selfie capture — 5.5 人日。Recording screen 1.5, …
+  - A. Camera check — 4.5 人日
+    - Setup 0.5
+    - Adapter 0.5
+
+    > Assumes the existing contact form
+  - B. Selfie capture — 5.5 人日
+    - Recording screen 1.5
   ```
 
 - A table column whose cells are all numbers with the same unit is right-aligned, with a bar under each number. A row whose first cell is 合計 / 小計 / Total (and the like) is a total: set in bold under a rule, with no bars, and left out of the bars of the other rows

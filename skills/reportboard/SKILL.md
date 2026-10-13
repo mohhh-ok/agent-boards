@@ -34,7 +34,17 @@ reportboard --target <name> <file.md>; echo "rc=$?"
 ## Writing the report so it reads well
 
 - Put the conclusion right under the `#` title. Use `##` for sections (they become the contents) and `###` inside them. Every `##`/`###` gets an "Edit with AI" button, so make headings name what the section is about
-- For a breakdown of effort, cost or time, write one item per line as `- <name> — <number> <unit>。<details>` with the same unit on every line. It is shown with the number first and a bar, so the heavy items stand out
+- For a breakdown of effort, cost or time, write one item per line as `- <name> — <number> <unit>` with the same unit on every line. It is shown with the number first and a bar, so the heavy items stand out. Under each item, write what it is made of as a nested list, one piece of work per line, and its assumptions and notes as a `>` quote. Do not run the pieces together in one sentence: the details are shown as written, and one long line is hard to read
+
+  ```md
+  - A. Camera check — 4.5 人日
+    - AWS setup (IAM, policy, Pulumi) 0.5
+    - Tests and a check on real devices 1
+
+    > Withdrawals come through the existing contact form; no screen of their own
+  - B. Selfie capture — 5.5 人日
+    - Recording screen 1.5
+  ```
 - Put comparisons in a GFM table. Write numbers with their unit in the cell (`38 秒`, `12 円`) and nothing else; such columns get right-aligned bars
 - Use `>` for notes. Do not write raw HTML (it is shown as text)
 

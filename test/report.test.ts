@@ -25,6 +25,15 @@ describe("renderReport", () => {
     expect(r.html).toContain('<li class="ledger-row is-short">');
   });
 
+  test("a nested list and notes under a ledger item are its details; the nested list stays a plain list", () => {
+    const r = render("- A. Camera — 4.5 人日\n  - Setup — 1 人日\n  - Tests — 2 人日\n\n  > Assumes the form\n- B. Selfie — 9 人日。Lead\n  - Recording 1.5\n");
+    expect(r.html).toContain('<ol class="ledger" data-max="9" data-unit="人日">');
+    expect(r.html).toContain('<div class="ledger-name">A. Camera</div><div class="ledger-body"><ul>\n<li>Setup — <span class="qty">1 人日</span></li>');
+    expect(r.html).toContain('<blockquote class="note"><p>Assumes the form</p>');
+    expect(r.html).toContain('<div class="ledger-body"><p>Lead</p><ul>\n<li>Recording 1.5</li>');
+    expect(r.html.match(/class="ledger"/g)?.length).toBe(1);
+  });
+
   test("a list stays a list when an item does not fit or units differ", () => {
     expect(render("- A — 1 人日\n- B is plain\n").html).not.toContain("ledger");
     expect(render("- A — 1 人日\n- B — 2 時間\n").html).not.toContain("ledger");
