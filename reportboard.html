@@ -322,6 +322,7 @@
   </nav>
   <main class="report" id="report"><p class="message" data-i18n="loading"></p></main>
 </div>
+<script src="enterKey.js"></script>
 <script>
 "use strict";
 const STRINGS = {
@@ -555,12 +556,8 @@ function makePanel({ key, section, threadId, origin }) {
   box.placeholder = section.row ? T.rowPlaceholder : T.placeholder;
   box.value = drafts.get(key) ?? "";
   box.addEventListener("input", () => drafts.set(key, box.value));
-  box.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
-      event.preventDefault();
-      composer.requestSubmit();
-    }
-  });
+  // Enter sends, Shift+Enter starts a new line. The Enter that confirms IME input does not send (enterKey.js)
+  window.EnterKey.onPlainEnter(box, () => composer.requestSubmit());
   const send = document.createElement("button");
   send.type = "submit";
   send.className = "send-button";

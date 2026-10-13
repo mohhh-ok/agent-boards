@@ -2,7 +2,7 @@
 <!--
   textboard.html — a window where the user edits a text file (mostly Markdown or plain text) directly, comments on any
   passage, and sends instructions to the AI (the calling agent). No build step and no external dependencies
-  (it only loads anchor.js from the same directory).
+  (it only loads anchor.js and enterKey.js from the same directory).
 
   - The text is edited as is in a textarea. A #mirror with the same typesetting sits behind it and highlights the commented ranges
   - Reading and writing files and sending instructions go through the __textboard* functions that textboard.ts injects with webview.bind
@@ -363,6 +363,7 @@
   </div>
 </footer>
 <script src="anchor.js"></script>
+<script src="enterKey.js"></script>
 <script>
 (function () {
   "use strict";
@@ -695,20 +696,8 @@
     cardsEl.style.minHeight = bottom + "px";
   }
 
-  // Shared handling for inputs confirmed with Enter. Shift+Enter (and ⌥Enter) insert a new line. The Enter that confirms
-  // IME conversion does not confirm: Safari / WKWebView fire the confirming keydown (keyCode 229) after compositionend,
-  // so check both isComposing and 229
-  function onPlainEnter(el, run) {
-    var composing = false;
-    el.addEventListener("compositionstart", function () { composing = true; });
-    el.addEventListener("compositionend", function () { composing = false; });
-    el.addEventListener("keydown", function (e) {
-      if (e.key !== "Enter" || e.shiftKey || e.altKey) return;
-      if (composing || e.isComposing || e.keyCode === 229) return;
-      e.preventDefault();
-      run();
-    });
-  }
+  // Inputs confirmed with Enter (Shift+Enter for a new line; the Enter that confirms IME input does not confirm). See enterKey.js
+  var onPlainEnter = window.EnterKey.onPlainEnter;
 
   function autosizeBody(ta) {
     ta.style.height = "auto";

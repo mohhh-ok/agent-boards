@@ -63,6 +63,10 @@ window.__reportboardSend = async ({ threadId, section, text }) => {
 window.__reportboardClose = async () => {};
 history.replaceState(null, "", "?rid=preview&lang=${lang === "en" ? "en" : "ja"}");
 </script>`;
-const page = readFileSync(resolve(import.meta.dir, "../reportboard.html"), "utf8").replace("<script>", `${stubs}\n<script>`);
+// enterKey.js is inlined: the preview is written elsewhere, away from the page's directory
+const enterKey = readFileSync(resolve(import.meta.dir, "../enterKey.js"), "utf8");
+const page = readFileSync(resolve(import.meta.dir, "../reportboard.html"), "utf8")
+  .replace('<script src="enterKey.js"></script>', () => `<script>${enterKey}</script>`)
+  .replace("<script>", `${stubs}\n<script>`);
 writeFileSync(resolve(output), page);
 console.log(resolve(output));

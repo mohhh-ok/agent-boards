@@ -5,7 +5,12 @@ import { Window } from "happy-dom";
 import { renderReport } from "../lib/report.ts";
 
 // The page script of reportboard.html, run in happy-dom with the bound functions stubbed (no layout, so no row is clipped)
-const PAGE = readFileSync(resolve(import.meta.dir, "../reportboard.html"), "utf8");
+// enterKey.js is inlined: the page loads it from its own directory, which happy-dom cannot fetch
+const ENTER_KEY = readFileSync(resolve(import.meta.dir, "../enterKey.js"), "utf8");
+const PAGE = readFileSync(resolve(import.meta.dir, "../reportboard.html"), "utf8").replace(
+  '<script src="enterKey.js"></script>',
+  () => `<script>${ENTER_KEY}</script>`,
+);
 const windows: Window[] = [];
 
 // next: the report as edited later; the first poll delivers it, as when the file changes on disk

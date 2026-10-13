@@ -5,8 +5,9 @@ Notes for changing the window itself. For usage, see [textboard.md](textboard.md
 ## Files
 
 - `textboard.ts`: the launcher, the window process (`--window`) and `wait`. Named windows, locks, acks and the state directory come from `lib/windows.ts`, the display language from `lib/lang.ts` (shared with moodboard and reportboard)
-- `textboard.html`: the whole page (HTML/CSS/JS, no external dependencies besides `anchor.js`)
+- `textboard.html`: the whole page (HTML/CSS/JS, no external dependencies besides `anchor.js` and `enterKey.js`)
 - `anchor.js`: keeps comments on their passage. Shared by the page (`<script>`) and the tests (`require`)
+- `enterKey.js`: Enter sends or confirms, Shift+Enter starts a new line, the Enter that confirms IME input does neither. Shared by textboard and reportboard (`<script>`) and the tests (`require`)
 - `editMenu.ts`: builds the macOS Edit menu through `bun:ffi`
 - `test/`: `bun test`
 
