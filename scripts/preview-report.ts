@@ -7,25 +7,41 @@ import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { renderReport } from "../lib/report.ts";
 
-const [input, output, lang = "ja"] = process.argv.slice(2);
+// --next <file.md>: a later version of the report, delivered by the poll once window.__deliverNext is set
+// (to check how a reload after an edit looks)
+const args = process.argv.slice(2);
+const nextAt = args.indexOf("--next");
+const nextInput = nextAt === -1 ? null : args.splice(nextAt, 2)[1];
+const [input, output, lang = "ja"] = args;
 if (input === undefined || output === undefined) {
   console.error("usage: bun scripts/preview-report.ts <file.md> <out.html> [ja|en]");
   process.exit(1);
 }
 const path = resolve(input);
-const report = {
+const reportOf = (file: string) => ({
   path,
   name: basename(path),
   dir: dirname(path),
-  modifiedAt: statSync(path).mtimeMs,
-  ...renderReport(readFileSync(path, "utf8"), { baseDir: dirname(path) }),
+  modifiedAt: statSync(file).mtimeMs,
+  ...renderReport(readFileSync(file, "utf8"), { baseDir: dirname(file) }),
   canTalk: true,
   threads: [] as unknown[],
-};
+});
+const report = reportOf(path);
+const next = nextInput === null ? null : reportOf(resolve(nextInput));
 const stubs = `<script>
 window.__reportboardLoad = async () => (${JSON.stringify(report).replaceAll("</", "<\\/")});
 window.__reportboardReady = async () => {};
-window.__reportboardPoll = async () => ({ replaceUrl: null, report: null, missing: false });
+window.__previewNext = ${JSON.stringify(next).replaceAll("</", "<\\/")};
+window.__reportboardPoll = async () => {
+  if (window.__deliverNext && window.__previewNext) {
+    const next = window.__previewNext;
+    window.__previewNext = null;
+    next.threads = window.__previewThreads.map((t) => ({ ...t }));
+    return { replaceUrl: null, report: next, threads: null, missing: false, waiting: false };
+  }
+  return { replaceUrl: null, report: null, threads: null, missing: false, waiting: false };
+};
 window.__reportboardOpen = async (href) => console.log("open", href);
 // Threads live in the page only (no AI answers in the preview)
 window.__previewThreads = [];

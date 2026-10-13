@@ -18,6 +18,8 @@ export type RenderedReport = { title: string | null; html: string; headings: Hea
 // "A. カメラ本人認証 (`identity-verification.md`) — 4.5 人日 (…)。AWS の用意 …"
 const LEDGER_ITEM = /^(?<name>[^\n]{1,120}?)\s+[—–]\s+(?<num>\d+(?:[.,]\d+)*)\s*(?<unit>[^\s\d。、．，,.()（）:：]{0,6})(?<rest>[\s\S]*)$/;
 const NUMERIC_CELL = /^[-+]?\d+(?:[.,]\d+)*\s*(?<unit>%|人日|人月|日|時間|h|分|秒|s|ms|円|万円|件|MB|GB|KB|倍|x)?$/;
+// A body row whose first cell is one of these is a total: it is set apart and left out of the bars
+const TOTAL_ROW = /^(合計|小計|総計|計|total|subtotal|sum)$/i;
 const QUANTITY = /\d+(?:[.,]\d+)*\s?(?:人日|人月|時間|週間|件|万円|円|%)/g;
 
 export function renderReport(markdown: string, options: { baseDir: string }): RenderedReport {
@@ -70,22 +72,27 @@ export function renderReport(markdown: string, options: { baseDir: string }): Re
       },
 
       table(token) {
+        const isTotal = (row: Tokens.TableCell[]) => TOTAL_ROW.test(row[0]?.text.trim() ?? "");
+        const itemRows = token.rows.filter((row) => !isTotal(row));
         const numeric = token.header.map((_, column) => isNumericColumn(token, column));
         const maxima = numeric.map((isNumeric, column) =>
-          isNumeric ? Math.max(...token.rows.map((row) => parseNumber(row[column].text))) : 0,
+          isNumeric ? Math.max(...itemRows.map((row) => parseNumber(row[column].text))) : 0,
         );
-        const cell = (tag: "th" | "td", content: Tokens.TableCell, column: number) => {
+        const cell = (tag: "th" | "td", content: Tokens.TableCell, column: number, total = false) => {
           const inner = this.parser.parseInline(content.tokens);
           if (!numeric[column]) {
             const align = content.align === null ? "" : ` style="text-align:${content.align}"`;
             return `<${tag}${align}>${inner}</${tag}>`;
           }
           if (tag === "th") return `<th class="num">${inner}</th>`;
+          if (total) return `<td class="num"><span class="num-value">${inner}</span></td>`;
           const ratio = maxima[column] > 0 ? parseNumber(content.text) / maxima[column] : 0;
           return `<td class="num"><span class="num-value">${inner}</span><span class="bar" aria-hidden="true"><span style="width:${(Math.max(0, ratio) * 100).toFixed(1)}%"></span></span></td>`;
         };
         const head = `<tr>${token.header.map((c, i) => cell("th", c, i)).join("")}</tr>`;
-        const body = token.rows.map((row) => `<tr>${row.map((c, i) => cell("td", c, i)).join("")}</tr>`).join("\n");
+        const body = token.rows
+          .map((row) => (isTotal(row) ? `<tr class="total-row">${row.map((c, i) => cell("td", c, i, true)).join("")}</tr>` : `<tr>${row.map((c, i) => cell("td", c, i)).join("")}</tr>`))
+          .join("\n");
         return `<div class="table-wrap"><table>\n<thead>${head}</thead>\n<tbody>\n${body}\n</tbody></table></div>\n`;
       },
 

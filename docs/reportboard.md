@@ -1,8 +1,8 @@
 # reportboard
 
-A window for reading a report your AI wrote, and asking it about any section.
+A window for reading a report your AI wrote, and revising it with the AI section by section.
 
-When your coding agent (Claude Code etc.) finishes a measurement, an investigation or an estimate, it writes the report in Markdown and opens it in reportboard. The window lays it out the same way every time, follows the file while the agent rewrites it, and lets you ask the agent about a section right where you are reading.
+When your coding agent (Claude Code etc.) finishes a measurement, an investigation or an estimate, it writes the report in Markdown and opens it in reportboard. The window lays it out the same way every time, follows the file while the agent rewrites it, and lets you tell the agent how to change a section — or ask about it — right where you are reading.
 
 ## Opening a report
 
@@ -11,7 +11,7 @@ reportboard --target <name> report.md
 ```
 
 - `--target` works as in moodboard: a window with the same name is reused and switched to the new file. Without `--target` a new unnamed window opens (it cannot talk to the AI; see below)
-- When the file changes on disk, the window reloads it and keeps the scroll position. The top bar says when it reloaded
+- When the file changes on disk, the window reloads it and keeps the scroll position. The top bar says when it reloaded. Table rows, list items, paragraphs and headings that are new or different since the previous version get a mark (a bar on the left and a light tint) until the next reload, and the top bar shows "N changes — show", which moves to each in turn
 - `reportboard --close <name>` closes that window; `reportboard --list` lists the open named windows
 - Exit codes: 0 = shown / 1 = bad arguments or path / 2 = not shown in time / 3 = the window opened but could not read the report (the reason is printed)
 
@@ -27,16 +27,16 @@ The look is fixed by reportboard; the Markdown only says what is in the report. 
   - B. Selfie capture — 5.5 人日。Recording screen 1.5, …
   ```
 
-- A table column whose cells are all numbers with the same unit is right-aligned, with a bar under each number
+- A table column whose cells are all numbers with the same unit is right-aligned, with a bar under each number. A row whose first cell is 合計 / 小計 / Total (and the like) is a total: set in bold under a rule, with no bars, and left out of the bars of the other rows
 - Quantities with a unit (`人日`, `%`, `円`, `件` …) in running text are set in bold
 - Long lists use two columns in a wide window
 - `>` quotes are notes, shown at the same size as the text
 - Raw HTML in the Markdown is shown as text, not run
 - Links to web pages open in the browser. Links to local files reveal the file in Finder; reportboard never opens or runs them
 
-## Talking to the AI about a section
+## Revising a section with the AI
 
-In a named window, every `##` and `###` heading has an "Ask the AI" button. It opens a box under the heading: type a question or an instruction and press Enter (Shift+Enter for a new line). The AI's answer appears in the same box, and you can keep going there. A section that already has a conversation shows it when the report opens.
+In a named window, every `##` and `###` heading has an "Edit with AI" button. It opens a box under the heading: write how the section should change ("add a total row", "shorten this") or a question, and press Enter (Shift+Enter for a new line). When you ask for a change, the agent edits the Markdown, the window reloads it, and the agent's reply in the same box says what it changed. A question gets an answer there. You can keep going in the same box. A section that already has a conversation shows it when the report opens.
 
 On the agent's side:
 
@@ -62,7 +62,7 @@ reportboard reply --thread <id> "answer"        # or: --file <path>
 
 `thread.messages` holds the whole conversation of that section, including this message. Exit codes of `wait`: 0 = got one / 1 = the window is not open / 2 = `--timeout` passed / 3 = the window was closed. Messages sent while nobody waits are kept for the next `wait`, and the box tells you whether the AI is waiting.
 
-If the agent edits the report, the window reloads it; the reply should say what changed.
+The agent edits the report when the message asks for a change and answers when it asks a question; either way it replies in the thread, saying what it changed.
 
 Conversations are kept in `~/.reportboard/threads/` (one file per report, named by the hash of its path), not next to the report. They survive reloading and reopening. Each one stays with its heading by text; if that heading disappears, the conversation moves to "Conversations whose heading is gone" at the end. Moving or renaming the report detaches its conversations.
 

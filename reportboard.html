@@ -18,6 +18,7 @@
     --warn: #9a3412;
     --warn-bg: #fff3e8;
     --hover: #f4f6f9;
+    --changed: #eaf0fd;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -32,6 +33,7 @@
       --warn: #fdba74;
       --warn-bg: #3a2416;
       --hover: #1c1f24;
+      --changed: #1f2a44;
     }
   }
   * { box-sizing: border-box; }
@@ -58,6 +60,13 @@
   .topbar .status { color: var(--sub); white-space: nowrap; }
   .topbar .status.is-fresh { color: var(--accent); font-weight: 600; }
   .topbar .status.is-warn { color: var(--warn); font-weight: 600; }
+  .topbar .changes-jump { white-space: nowrap; }
+  .topbar .changes-jump[hidden] { display: none; }
+  /* What changed in the last reload: a bar on the left and a light tint, until the next reload */
+  .report .is-changed { background: var(--changed); box-shadow: inset 3px 0 0 var(--accent); }
+  .report tr.is-changed { box-shadow: none; }
+  .report tr.is-changed > td { background: var(--changed); }
+  .report tr.is-changed > td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 
   /* ---- layout ---- */
   .shell {
@@ -210,18 +219,19 @@
   .report th.num, .report td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .report td.num .num-value { display: block; font-weight: 700; }
   .report td.num .bar { width: 72px; margin: 4px 0 2px auto; }
+  .report tr.total-row td { font-weight: 700; border-top: 2px solid var(--sub); }
 
   /* ---- conversations with the AI, per section ---- */
   .section-heading { display: flex; align-items: baseline; gap: 16px; }
   .section-heading .heading-text { flex: 0 1 auto; }
-  .ask-ai {
+  .edit-with-ai {
     flex: none;
     font: inherit; font-size: 13px; font-weight: 400; line-height: 1.4;
     color: var(--accent);
     background: none; border: 0; padding: 2px 0; cursor: pointer;
     text-decoration: underline; text-underline-offset: 3px;
   }
-  .ask-ai:hover { color: var(--text); }
+  .edit-with-ai:hover { color: var(--text); }
   .thread {
     margin: 4px 0 18px;
     border: 1px solid var(--line);
@@ -231,7 +241,8 @@
   }
   .thread[hidden] { display: none; }
   .thread-origin { padding: 10px 14px 0; font-size: 13px; color: var(--sub); }
-  .thread-messages { list-style: none; margin: 0; padding: 4px 0; }
+  /* Long conversations scroll inside the box (kept at the latest message), so the section's content stays in view */
+  .thread-messages { list-style: none; margin: 0; padding: 4px 0; max-height: 15em; overflow-y: auto; }
   .thread-messages:empty { display: none; }
   .message-item { margin: 0; padding: 8px 14px; }
   .message-item + .message-item { border-top: 1px solid var(--line); }
@@ -239,7 +250,7 @@
   .message-from { font-weight: 700; color: var(--text); }
   .message-item.from-ai .message-from { color: var(--accent); }
   .message-text { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 2px; }
-  .composer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 10px; padding: 10px 14px 12px; border-top: 1px solid var(--line); }
+  .composer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; padding: 8px 14px 10px; border-top: 1px solid var(--line); }
   .thread-messages:empty + .composer { border-top: 0; }
   .composer textarea {
     font: inherit; color: var(--text); background: var(--page);
@@ -268,6 +279,7 @@
 <header class="topbar">
   <span class="file" id="file"></span>
   <span class="dir" id="dir"></span>
+  <button type="button" class="text-button changes-jump" id="changes-jump" hidden></button>
   <span class="status" id="status"></span>
 </header>
 <div class="shell">
@@ -285,6 +297,7 @@ const STRINGS = {
     loadFailed: "レポートを読み込めませんでした",
     contents: "目次",
     reloaded: (time) => `${time} に更新を読み直しました`,
+    changes: (n) => `変わった所 ${n} か所 — 見る`,
     openedAt: (time) => `${time} 更新のファイル`,
     missing: "ファイルが見つかりません（移動か削除されました）。最後に読んだ内容を表示しています",
     more: "続きを読む",
@@ -293,16 +306,16 @@ const STRINGS = {
     columnScale: "棒の長さは、この列で最大の値に対する割合",
     openAll: "内訳をすべて開く",
     closeAll: "内訳をすべて閉じる",
-    ask: "AI に聞く",
+    ask: "AI と直す",
     conversation: (n) => `AI とのやり取り（${n}）`,
     hideConversation: "やり取りを閉じる",
     you: "あなた",
     ai: "AI",
-    placeholder: "このセクションについて AI に指示・質問する。Enter で送る、Shift+Enter で改行",
+    placeholder: "このセクションの直し方か、聞きたいことを書く（例: 表に合計の行を足して）。Enter で送る、Shift+Enter で改行",
     send: "送る",
     sending: "送っています…",
     waiting: "AI が受け取り待ちです。送るとすぐ届きます",
-    notWaiting: "AI は今、受け取り待ちではありません。送った内容は保存され、AI が次に確認したときに届きます",
+    notWaiting: "AI は今、受け取り待ちではありません。送った内容は保存されます。AI との会話で「reportboard を見て」と伝えると届きます",
     awaitingReply: "送りました。AI の返事はここに出ます",
     sendFailed: (e) => `送れませんでした: ${e}`,
     orphans: "見出しが見つからないやり取り",
@@ -313,6 +326,7 @@ const STRINGS = {
     loadFailed: "Could not load the report",
     contents: "Contents",
     reloaded: (time) => `Reloaded the changes at ${time}`,
+    changes: (n) => `${n} change${n === 1 ? "" : "s"} — show`,
     openedAt: (time) => `File updated ${time}`,
     missing: "The file is gone (moved or deleted). Showing what was last read",
     more: "Read more",
@@ -321,16 +335,16 @@ const STRINGS = {
     columnScale: "Bars show each value against the largest in this column",
     openAll: "Open all details",
     closeAll: "Close all details",
-    ask: "Ask the AI",
+    ask: "Edit with AI",
     conversation: (n) => `Conversation with the AI (${n})`,
     hideConversation: "Hide the conversation",
     you: "You",
     ai: "AI",
-    placeholder: "Ask or instruct the AI about this section. Enter to send, Shift+Enter for a new line",
+    placeholder: "Say how to change this section, or ask about it (e.g. add a total row to the table). Enter to send, Shift+Enter for a new line",
     send: "Send",
     sending: "Sending…",
     waiting: "The AI is waiting. What you send reaches it right away",
-    notWaiting: "The AI is not waiting right now. What you send is kept and reaches it the next time it checks",
+    notWaiting: "The AI is not waiting right now. What you send is kept; tell the AI \"check reportboard\" in your conversation to deliver it",
     awaitingReply: "Sent. The AI's reply will appear here",
     sendFailed: (e) => `Could not send: ${e}`,
     orphans: "Conversations whose heading is gone",
@@ -449,7 +463,7 @@ function buildThreadPanels() {
     if (!canTalk) continue;
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "ask-ai";
+    button.className = "edit-with-ai";
     button.dataset.section = section.id;
     heading.append(button);
     heading.after(makePanel({ key: panelKey(section), section, threadId: null }));
@@ -596,7 +610,8 @@ function fillPanel(panel, thread) {
       return li;
     }),
   );
-  const button = document.querySelector(`.ask-ai[data-section="${panel.previousElementSibling?.id ?? ""}"]`);
+  list.scrollTop = list.scrollHeight;
+  const button = document.querySelector(`.edit-with-ai[data-section="${panel.previousElementSibling?.id ?? ""}"]`);
   if (button) button.textContent = panel.hidden ? (messages.length > 0 ? T.conversation(messages.length) : T.ask) : T.hideConversation;
 }
 
@@ -609,7 +624,7 @@ function updateWaiting() {
 }
 
 document.addEventListener("click", (event) => {
-  const button = event.target.closest(".ask-ai");
+  const button = event.target.closest(".edit-with-ai");
   if (!button) return;
   const panel = document.getElementById(button.dataset.section)?.nextElementSibling;
   if (!panel?.classList.contains("thread")) return;
@@ -697,6 +712,53 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+// ---------------- What changed in a reload ----------------
+// Compared by text, block by block (table rows, list items, paragraphs, headings, code, notes). A block whose text was
+// not in the previous rendering is new or changed. Conversation boxes are not part of the report and are skipped
+const BLOCKS = ":scope > p, :scope > blockquote, :scope > pre, tr, li, h1, h2, h3, h4";
+const changed = [];
+let changeIndex = 0;
+const $jump = document.getElementById("changes-jump");
+
+function blocksNow() {
+  return [...$report.querySelectorAll(BLOCKS)].filter((el) => !el.closest(".thread") && !el.closest("thead"));
+}
+
+function blockTexts() {
+  const counts = new Map();
+  for (const el of blocksNow()) {
+    const key = el.textContent.replace(/\s+/g, " ").trim();
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function markChanges(before) {
+  changed.length = 0;
+  changeIndex = 0;
+  const found = [];
+  for (const el of blocksNow()) {
+    const key = el.textContent.replace(/\s+/g, " ").trim();
+    const left = before.get(key) ?? 0;
+    if (left > 0) before.set(key, left - 1);
+    else found.push(el);
+  }
+  // A list item whose nested item changed has changed text too; mark only the innermost block
+  for (const el of found) {
+    if (found.some((other) => other !== el && el.contains(other))) continue;
+    el.classList.add("is-changed");
+    changed.push(el);
+  }
+  $jump.hidden = changed.length === 0;
+  if (changed.length > 0) $jump.textContent = T.changes(changed.length);
+}
+
+$jump.addEventListener("click", () => {
+  if (changed.length === 0) return;
+  changed[changeIndex % changed.length].scrollIntoView({ block: "center" });
+  changeIndex += 1;
+});
+
 async function poll() {
   try {
     const result = await window.__reportboardPoll();
@@ -712,8 +774,10 @@ async function poll() {
     if (result.missing) setStatus(T.missing, "warn");
     else if (result.report) {
       const y = window.scrollY;
+      const before = blockTexts();
       render(result.report, { keepOpen: openRowKeys() });
       window.scrollTo(0, y);
+      markChanges(before);
       setStatus(T.reloaded(timeOf(Date.now())), "fresh");
       clearTimeout(statusTimer);
       statusTimer = setTimeout(() => setStatus(T.openedAt(timeOf(result.report.modifiedAt))), 4000);

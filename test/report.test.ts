@@ -70,3 +70,12 @@ describe("links", () => {
     expect(r.html).toContain("bad");
   });
 });
+
+describe("total rows", () => {
+  test("a total row is set apart and left out of the bars", () => {
+    const r = render("| model | time |\n| --- | --- |\n| a | 100 秒 |\n| b | 50 秒 |\n| 合計 | 150 秒 |\n");
+    expect(r.html).toContain('<tr class="total-row"><td>合計</td><td class="num"><span class="num-value">150 秒</span></td></tr>');
+    expect(r.html).toContain('style="width:100.0%"');
+    expect(r.html).toContain('style="width:50.0%"');
+  });
+});
