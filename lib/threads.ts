@@ -50,7 +50,13 @@ export function addReply(params: { home: string; threadId: string; text: string;
   if (!existsSync(dir)) return null;
   for (const name of readdirSync(dir)) {
     if (!name.endsWith(".json")) continue;
-    const data = JSON.parse(readFileSync(join(dir, name), "utf8")) as ThreadFile;
+    let data: ThreadFile;
+    try {
+      data = JSON.parse(readFileSync(join(dir, name), "utf8")) as ThreadFile;
+    } catch {
+      // Another report's broken file must not stop replies to every other thread
+      continue;
+    }
     const thread = data.threads.find((t) => t.id === params.threadId);
     if (thread === undefined) continue;
     thread.messages.push({ from: "ai", text: params.text, at: (params.now ?? new Date()).toISOString() });

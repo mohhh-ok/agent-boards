@@ -16,7 +16,7 @@
 // Conversations: each h2 / h3 of a named window has a button. What the user sends is appended to the section's thread
 // (lib/threads.ts, kept in ~/.reportboard) and queued in the outbox for `wait` (lib/outbox.ts, shared with textboard).
 //
-// Exit codes of opening: 0 = shown / 1 = bad arguments or path / 2 = not shown in time
+// Exit codes of opening: 0 = shown / 1 = bad arguments or path / 2 = not shown in time / 3 = the window opened but could not read the report
 import { Webview, SizeHint } from "webview-bun";
 import { spawnSync, type ChildProcess } from "node:child_process";
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
@@ -40,7 +40,8 @@ const HOME = process.env.REPORTBOARD_HOME || join(homedir(), ".reportboard");
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 
 type WindowConfig = { target: string | null; url: string; requestId: string };
-type Ack = { pid: number };
+// failed: why the page could not show the report (the window stays open with the message)
+type Ack = { pid: number; failed: string | null };
 // What to show for one request. Written to boards/<rid>.json; the page reads it with __reportboardLoad(rid)
 type Board = { path: string };
 
@@ -66,6 +67,7 @@ const MESSAGES = {
     waitTimeout: (target: string) => `target=${target} から指示が来ないまま --timeout が過ぎました`,
     replyUsage: "reply は --thread <id> と、本文か --file <path> を指定してください",
     threadNotFound: (id: string) => `スレッドが見つかりません: ${id}`,
+    loadFailed: (detail: string) => `窓は開きましたが、レポートを読み込めませんでした: ${detail}`,
     emptyReply: "返事の本文が空です",
   },
   en: {
@@ -87,6 +89,7 @@ const MESSAGES = {
     waitTimeout: (target: string) => `No instruction came from target=${target} before --timeout`,
     replyUsage: "reply needs --thread <id> and either the text or --file <path>",
     threadNotFound: (id: string) => `Thread not found: ${id}`,
+    loadFailed: (detail: string) => `The window opened but could not read the report: ${detail}`,
     emptyReply: "The reply is empty",
   },
 } satisfies Record<Lang, unknown>;
@@ -200,6 +203,10 @@ async function showReport(request: { target: string | null; path: string }): Pro
   }
   const action = existingPid !== null ? "replaced" : "new";
   console.log(`opened target=${request.target ?? "(unnamed)"} pid=${ack.pid} ${action} file=${request.path}`);
+  if (ack.failed !== null) {
+    console.error(i18n.M.loadFailed(ack.failed));
+    return 3;
+  }
   return 0;
 }
 
@@ -238,16 +245,21 @@ function runWindow(config: WindowConfig) {
 
   // Bun's event loop is stopped during run(), so callbacks use synchronous I/O only
   webview.bind("__reportboardLoad", (rid: string) => {
-    const board = host.takeBoard<Board>(rid);
-    currentPath = board.path;
-    lastStamp = stampOf(board.path);
-    const report = renderNow(board.path);
-    webview.title = `${report.title ?? basename(board.path)} — reportboard${config.target === null ? "" : ` ${config.target}`}`;
-    return report;
+    // Errors are returned, not thrown: webview-bun turns a thrown Error into "{}" and the message is lost
+    try {
+      const board = host.takeBoard<Board>(rid);
+      currentPath = board.path;
+      lastStamp = stampOf(board.path);
+      const report = renderNow(board.path);
+      webview.title = `${report.title ?? basename(board.path)} — reportboard${config.target === null ? "" : ` ${config.target}`}`;
+      return report;
+    } catch (error) {
+      return { error: (error as Error).message };
+    }
   });
 
-  webview.bind("__reportboardReady", (rid: string) => {
-    host.writeAck(rid, { pid: process.pid } satisfies Ack);
+  webview.bind("__reportboardReady", (rid: string, failed: string | null) => {
+    host.writeAck(rid, { pid: process.pid, failed: failed ?? null } satisfies Ack);
   });
 
   // Called by the page every 500 ms. Returns a replace request, and a new rendering when the file changed on disk

@@ -95,6 +95,14 @@ export function renderReport(markdown: string, options: { baseDir: string }): Re
         return escapeHtml(text);
       },
 
+      // Only web pages, mail, anchors and relative paths become links; anything else (javascript: etc.) is plain text
+      link({ href, title: linkTitle, tokens }) {
+        const inner = this.parser.parseInline(tokens);
+        if (!/^(https?:|mailto:|#)/i.test(href) && /^[a-z][a-z0-9+.-]*:/i.test(href)) return inner;
+        const titleAttr = linkTitle ? ` title="${escapeHtml(linkTitle)}"` : "";
+        return `<a href="${escapeHtml(href)}"${titleAttr}>${inner}</a>`;
+      },
+
       image({ href, title: imageTitle, text }) {
         const src = /^[a-z][a-z0-9+.-]*:/i.test(href) ? href : pathToFileURL(isAbsolute(href) ? href : resolve(options.baseDir, href)).href;
         const titleAttr = imageTitle ? ` title="${escapeHtml(imageTitle)}"` : "";

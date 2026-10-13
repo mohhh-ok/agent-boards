@@ -61,3 +61,12 @@ describe("renderReport", () => {
     expect(render("> note\n").html).toContain('<blockquote class="note">');
   });
 });
+
+describe("links", () => {
+  test("only web, mail, anchors and relative paths become links", () => {
+    expect(render("[a](https://x.test/) [b](mailto:a@x.test) [c](#s) [d](other.md)\n").html.match(/<a /g)?.length).toBe(4);
+    const r = render("[bad](javascript:alert(1)) [app](file:///Applications/Calculator.app)\n");
+    expect(r.html).not.toContain("<a ");
+    expect(r.html).toContain("bad");
+  });
+});

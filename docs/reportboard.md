@@ -13,7 +13,7 @@ reportboard --target <name> report.md
 - `--target` works as in moodboard: a window with the same name is reused and switched to the new file. Without `--target` a new unnamed window opens (it cannot talk to the AI; see below)
 - When the file changes on disk, the window reloads it and keeps the scroll position. The top bar says when it reloaded
 - `reportboard --close <name>` closes that window; `reportboard --list` lists the open named windows
-- Exit codes: 0 = shown / 1 = bad arguments or path / 2 = not shown in time
+- Exit codes: 0 = shown / 1 = bad arguments or path / 2 = not shown in time / 3 = the window opened but could not read the report (the reason is printed)
 
 ## How the report is laid out
 

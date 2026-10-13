@@ -425,18 +425,20 @@ function panelKey(section) {
 
 function buildThreadPanels() {
   document.getElementById("orphans")?.remove();
-  if (!canTalk) return;
   for (const section of sections) {
     const heading = document.getElementById(section.id);
     if (!heading) continue;
+    // The heading is a flex row; its text stays one item whether or not the button is added
     const text = document.createElement("span");
     text.className = "heading-text";
     text.append(...heading.childNodes);
+    heading.append(text);
+    if (!canTalk) continue;
     const button = document.createElement("button");
     button.type = "button";
     button.className = "ask-ai";
     button.dataset.section = section.id;
-    heading.append(text, button);
+    heading.append(button);
     heading.after(makePanel({ key: panelKey(section), section, threadId: null }));
   }
 }
@@ -707,20 +709,24 @@ async function poll() {
   }
 }
 
+let loadError = null;
 (async () => {
   try {
     const report = await window.__reportboardLoad(rid);
+    if (report.error) throw new Error(report.error);
     render(report, { keepOpen: new Set() });
     setStatus(T.openedAt(timeOf(report.modifiedAt)));
+    loadError = null;
   } catch (error) {
+    loadError = error?.message ?? String(error);
     $report.innerHTML = "";
     const p = document.createElement("p");
     p.className = "message is-error";
-    p.textContent = `${T.loadFailed}: ${error?.message ?? error}`;
+    p.textContent = `${T.loadFailed}: ${loadError}`;
     $report.append(p);
   }
   // Not awaited: a bound function that returns nothing may never settle its promise, and polling must start anyway
-  Promise.resolve(window.__reportboardReady(rid)).catch(() => {});
+  Promise.resolve(window.__reportboardReady(rid, loadError)).catch(() => {});
   setTimeout(poll, 500);
 })();
 </script>

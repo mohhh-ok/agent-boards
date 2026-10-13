@@ -85,3 +85,11 @@ describe("links in a report", async () => {
     expect(openArgsFor("missing.md", "/r/a.md")).toBeNull();
   });
 });
+
+describe("broken thread files", () => {
+  test("a broken file of another report does not stop replies", () => {
+    const t = addUserMessage({ home: dir, reportPath: "/r/ok.md", threadId: null, section: { level: 2, text: "x", occurrence: 0 }, text: "q" });
+    require("node:fs").writeFileSync(join(dir, "threads", "0broken.json"), "{");
+    expect(addReply({ home: dir, threadId: t.id, text: "a" })?.file).toBe("/r/ok.md");
+  });
+});
