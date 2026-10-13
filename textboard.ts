@@ -21,7 +21,7 @@
 // The page calls __textboardPoll periodically to receive replace requests, outside changes to the file and whether a wait is running.
 import { Webview, SizeHint } from "webview-bun";
 import { spawnSync, type ChildProcess } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
@@ -29,13 +29,13 @@ import { homedir } from "node:os";
 import { installEditMenu } from "./editMenu.ts";
 import { applyLang, createI18n, type Lang } from "./lib/lang.ts";
 import { createWindowHost, isValidTargetName } from "./lib/windows.ts";
+import { OUTBOX_DIR_NAME, createOutbox } from "./lib/outbox.ts";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const htmlPath = resolve(dirname(scriptPath), "textboard.html");
 // State lives in /tmp/textboard-<uid>/ (lib/windows.ts). outbox/ holds the instructions not yet taken by a wait
-const host = createWindowHost({ name: "textboard", scriptPath, htmlPath, extraDirs: ["outbox"] });
-const OUTBOX_DIR = join(host.stateDir, "outbox");
-const WAIT_POLL_MS = 300;
+const host = createWindowHost({ name: "textboard", scriptPath, htmlPath, extraDirs: [OUTBOX_DIR_NAME] });
+const outbox = createOutbox(host);
 // Larger files are not treated as text (the size assumes editing in a textarea)
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 // Where comments are stored. Kept here rather than next to the document, so no extra files appear in the user's repository.
@@ -113,7 +113,7 @@ async function main(argv: string[]) {
     host.listTargets();
     return;
   }
-  if (argv[0] === "wait") process.exit(await waitForInstruction(argv.slice(1)));
+  if (argv[0] === "wait") process.exit(await outbox.wait({ args: argv.slice(1), messages: i18n.M, usageError, isTargetName: isValidTargetName }));
 
   host.sweepStaleFiles();
   if (argv[0] !== "--target") usageError(i18n.M.badTargetName);
@@ -206,7 +206,7 @@ function sameStamp(a: DiskStamp, b: DiskStamp): boolean {
 
 function runWindow(config: WindowConfig) {
   host.registerWindow(config.target);
-  mkdirSync(outboxDir(config.target), { recursive: true, mode: 0o700 });
+  outbox.prepare(config.target);
 
   // The open file and its state on disk when last read or written. Used to detect outside changes
   let currentPath: string | null = null;
@@ -277,15 +277,7 @@ function runWindow(config: WindowConfig) {
     }
   });
 
-  webview.bind("__textboardSend", (payload: Record<string, unknown>) => {
-    const id = `${Date.now()}-${randomUUID().slice(0, 8)}`;
-    const full = { id, target: config.target, ...payload };
-    // Write under another name and rename, so wait never reads a half-written file
-    const tmp = join(outboxDir(config.target), `.${id}.tmp`);
-    writeFileSync(tmp, JSON.stringify(full, null, 2) + "\n");
-    renameSync(tmp, join(outboxDir(config.target), `${id}.json`));
-    return { id };
-  });
+  webview.bind("__textboardSend", (payload: Record<string, unknown>) => outbox.send(config.target, payload));
 
   // Called by the page every 500 ms. Returns a replace request, outside changes to the file, whether a wait is running, and the instructions not yet taken
   webview.bind("__textboardPoll", () => {
@@ -298,7 +290,7 @@ function runWindow(config: WindowConfig) {
         disk = { text: stamp === null ? null : readFileSync(currentPath, "utf8") };
       }
     }
-    return { replaceUrl, disk, waiting: waiterAlive(config.target), pending: pendingIds(config.target) };
+    return { replaceUrl, disk, waiting: outbox.waiterAlive(config.target), pending: outbox.pendingIds(config.target) };
   });
 
   webview.bind("__textboardCopy", (text: string) => {
@@ -315,117 +307,6 @@ function runWindow(config: WindowConfig) {
   webview.navigate(config.url);
   webview.run();
   host.cleanupWindow(config);
-}
-
-// ---------------- wait ----------------
-
-async function waitForInstruction(args: string[]): Promise<number> {
-  let target: string | null = null;
-  let timeoutMs: number | null = null;
-  for (let i = 0; i < args.length; i += 2) {
-    if (args[i] === "--target") target = requireTargetName(args[i + 1]);
-    else if (args[i] === "--timeout") {
-      const seconds = Number(args[i + 1]);
-      if (!Number.isFinite(seconds) || seconds <= 0) usageError(i18n.M.badTimeout);
-      timeoutMs = seconds * 1000;
-    } else usageError(i18n.M.badTargetName);
-  }
-  if (target === null) usageError(i18n.M.badTargetName);
-
-  // Hand over a queued instruction first, even if the window is not open
-  const queued = takeInstruction(target);
-  if (queued !== null) {
-    process.stdout.write(queued);
-    return 0;
-  }
-  if (host.findWindowPid(target) === null) {
-    console.error(i18n.M.notOpen(target));
-    return 1;
-  }
-
-  // A marker so the window can show that the AI is waiting. With several waits for the same name, any live one counts
-  const marker = join(waitersDir(target), String(process.pid));
-  mkdirSync(waitersDir(target), { recursive: true, mode: 0o700 });
-  writeFileSync(marker, "");
-  const removeMarker = () => rmSync(marker, { force: true });
-  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-    process.on(signal, () => {
-      removeMarker();
-      process.exit(130);
-    });
-  }
-
-  try {
-    const deadline = timeoutMs === null ? Infinity : Date.now() + timeoutMs;
-    let lastWindowCheck = 0;
-    while (Date.now() < deadline) {
-      const instruction = takeInstruction(target);
-      if (instruction !== null) {
-        process.stdout.write(instruction);
-        return 0;
-      }
-      if (Date.now() - lastWindowCheck > 1000) {
-        lastWindowCheck = Date.now();
-        if (host.findWindowPid(target) === null && takeInstructionPeek(target) === 0) {
-          console.error(i18n.M.windowClosed(target));
-          return 3;
-        }
-      }
-      await Bun.sleep(WAIT_POLL_MS);
-    }
-    console.error(i18n.M.waitTimeout(target));
-    return 2;
-  } finally {
-    removeMarker();
-  }
-}
-
-function pendingIds(target: string): string[] {
-  const dir = outboxDir(target);
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir)
-    .filter((f) => f.endsWith(".json") && !f.startsWith("."))
-    .sort()
-    .map((f) => f.slice(0, -".json".length));
-}
-
-function takeInstructionPeek(target: string): number {
-  return pendingIds(target).length;
-}
-
-// Take the oldest instruction. Claim it by rename before reading, so that even when several waits take at once,
-// each instruction goes to exactly one wait
-function takeInstruction(target: string): string | null {
-  for (const id of pendingIds(target)) {
-    const from = join(outboxDir(target), `${id}.json`);
-    const claimed = join(outboxDir(target), `.${id}.${process.pid}.taken`);
-    try {
-      renameSync(from, claimed);
-    } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") continue;
-      throw error;
-    }
-    const content = readFileSync(claimed, "utf8");
-    rmSync(claimed, { force: true });
-    return content;
-  }
-  return null;
-}
-
-function waiterAlive(target: string): boolean {
-  const dir = waitersDir(target);
-  if (!existsSync(dir)) return false;
-  for (const file of readdirSync(dir)) {
-    const pid = Number(file);
-    if (!Number.isInteger(pid) || pid <= 0) continue;
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch {
-      rmSync(join(dir, file), { force: true });
-    }
-  }
-  return false;
 }
 
 function requireTargetName(name: string | undefined): string {
@@ -450,11 +331,4 @@ export function commentsPath(path: string) {
   return join(COMMENTS_DIR, createHash("sha256").update(path).digest("hex") + ".json");
 }
 
-function waitersDir(target: string) {
-  return join(host.targetsDir, `${target}.waiters`);
-}
-
-function outboxDir(target: string) {
-  return join(OUTBOX_DIR, target);
-}
 

@@ -11,7 +11,9 @@ import { isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 export type Heading = { id: string; text: string };
-export type RenderedReport = { title: string | null; html: string; headings: Heading[] };
+// h2 and h3: the places a conversation with the AI can be started (lib/threads.ts)
+export type ReportSection = { id: string; level: number; text: string; occurrence: number };
+export type RenderedReport = { title: string | null; html: string; headings: Heading[]; sections: ReportSection[] };
 
 // "A. カメラ本人認証 (`identity-verification.md`) — 4.5 人日 (…)。AWS の用意 …"
 const LEDGER_ITEM = /^(?<name>[^\n]{1,120}?)\s+[—–]\s+(?<num>\d+(?:[.,]\d+)*)\s*(?<unit>[^\s\d。、．，,.()（）:：]{0,6})(?<rest>[\s\S]*)$/;
@@ -20,6 +22,7 @@ const QUANTITY = /\d+(?:[.,]\d+)*\s?(?:人日|人月|時間|週間|件|万円|�
 
 export function renderReport(markdown: string, options: { baseDir: string }): RenderedReport {
   const headings: Heading[] = [];
+  const sections: ReportSection[] = [];
   let title: string | null = null;
   const marked = new Marked({ gfm: true });
 
@@ -32,10 +35,12 @@ export function renderReport(markdown: string, options: { baseDir: string }): Re
           title = text;
           return `<h1 class="report-title">${inner}</h1>\n`;
         }
-        if (depth === 2) {
-          const id = `section-${headings.length + 1}`;
-          headings.push({ id, text });
-          return `<h2 id="${id}">${inner}</h2>\n`;
+        if (depth === 2 || depth === 3) {
+          const id = `section-${sections.length + 1}`;
+          const occurrence = sections.filter((s) => s.level === depth && s.text === text).length;
+          sections.push({ id, level: depth, text, occurrence });
+          if (depth === 2) headings.push({ id, text });
+          return `<h${depth} id="${id}" class="section-heading">${inner}</h${depth}>\n`;
         }
         return `<h${depth}>${inner}</h${depth}>\n`;
       },
@@ -99,7 +104,7 @@ export function renderReport(markdown: string, options: { baseDir: string }): Re
   });
 
   const html = emphasizeQuantities(marked.parse(markdown, { async: false }));
-  return { title, html, headings };
+  return { title, html, headings, sections };
 }
 
 type LedgerRow = { name: string; num: string; unit: string; value: number; rest: string };

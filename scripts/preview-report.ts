@@ -19,12 +19,27 @@ const report = {
   dir: dirname(path),
   modifiedAt: statSync(path).mtimeMs,
   ...renderReport(readFileSync(path, "utf8"), { baseDir: dirname(path) }),
+  canTalk: true,
+  threads: [] as unknown[],
 };
 const stubs = `<script>
 window.__reportboardLoad = async () => (${JSON.stringify(report).replaceAll("</", "<\\/")});
 window.__reportboardReady = async () => {};
 window.__reportboardPoll = async () => ({ replaceUrl: null, report: null, missing: false });
 window.__reportboardOpen = async (href) => console.log("open", href);
+// Threads live in the page only (no AI answers in the preview)
+window.__previewThreads = [];
+window.__reportboardSend = async ({ threadId, section, text }) => {
+  const sections = (await window.__reportboardLoad()).sections;
+  let thread = window.__previewThreads.find((t) => t.id === threadId);
+  if (!thread) {
+    const placed = sections.find((s) => s.level === section.level && s.text === section.text && s.occurrence === section.occurrence);
+    thread = { id: "t-" + Math.random().toString(16).slice(2, 10), heading: section, messages: [], sectionId: placed ? placed.id : null };
+    window.__previewThreads.push(thread);
+  }
+  thread.messages.push({ from: "user", text, at: new Date().toISOString() });
+  return { ok: true, threadId: thread.id, threads: window.__previewThreads };
+};
 window.__reportboardClose = async () => {};
 history.replaceState(null, "", "?rid=preview&lang=${lang === "en" ? "en" : "ja"}");
 </script>`;

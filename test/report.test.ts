@@ -11,7 +11,7 @@ describe("renderReport", () => {
       { id: "section-1", text: "One" },
       { id: "section-2", text: "Two x" },
     ]);
-    expect(r.html).toContain('<h2 id="section-2">Two <code>x</code></h2>');
+    expect(r.html).toContain('<h2 id="section-2" class="section-heading">Two <code>x</code></h2>');
   });
 
   test("a list of '<name> — <number> <unit>' items becomes a ledger with bars against the largest value", () => {

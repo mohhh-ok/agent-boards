@@ -3,6 +3,8 @@
 //
 // Usage:
 //   reportboard [--target <name>] <file.md>   Open. If a window with that name exists, switch it to the file
+//   reportboard wait --target <name> [--timeout <sec>]   Wait until the user sends something to the AI from a section; print it as JSON
+//   reportboard reply --thread <id> (<text> | --file <path>)   Answer in that thread. It shows up in the section it was sent from
 //   reportboard --close <name>                Close only the window with that name
 //   reportboard --list                        List the open named windows
 // Every form may start with --lang ja|en (display language; see "Language" in docs/reportboard.md)
@@ -11,20 +13,29 @@
 // __reportboardPoll every 500 ms; when the file changed on disk, the poll returns the new rendering, so the window
 // follows the file as the agent rewrites it. Named windows, locks and acks are shared with the other commands (lib/windows.ts).
 //
-// Exit codes: 0 = shown / 1 = bad arguments or path / 2 = not shown in time
+// Conversations: each h2 / h3 of a named window has a button. What the user sends is appended to the section's thread
+// (lib/threads.ts, kept in ~/.reportboard) and queued in the outbox for `wait` (lib/outbox.ts, shared with textboard).
+//
+// Exit codes of opening: 0 = shown / 1 = bad arguments or path / 2 = not shown in time
 import { Webview, SizeHint } from "webview-bun";
 import { spawnSync, type ChildProcess } from "node:child_process";
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
+import { homedir } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { applyLang, createI18n, type Lang } from "./lib/lang.ts";
 import { createWindowHost, isValidTargetName } from "./lib/windows.ts";
 import { renderReport } from "./lib/report.ts";
+import { OUTBOX_DIR_NAME, createOutbox } from "./lib/outbox.ts";
+import { addReply, addUserMessage, placeThreads, readThreads, threadsPath, type SectionRef } from "./lib/threads.ts";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const htmlPath = resolve(dirname(scriptPath), "reportboard.html");
-const host = createWindowHost({ name: "reportboard", scriptPath, htmlPath });
+const host = createWindowHost({ name: "reportboard", scriptPath, htmlPath, extraDirs: [OUTBOX_DIR_NAME] });
+const outbox = createOutbox(host);
+// Where the threads are kept. REPORTBOARD_HOME changes it (for verification)
+const HOME = process.env.REPORTBOARD_HOME || join(homedir(), ".reportboard");
 // Larger files are not treated as a report
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 
@@ -37,7 +48,7 @@ type Board = { path: string };
 const MESSAGES = {
   ja: {
     usage:
-      "usage: reportboard [--lang ja|en] [--target <名前>] <file.md>\n       reportboard [--lang ja|en] --close <名前>\n       reportboard [--lang ja|en] --list",
+      "usage: reportboard [--lang ja|en] [--target <名前>] <file.md>\n       reportboard [--lang ja|en] wait --target <名前> [--timeout <秒>]\n       reportboard [--lang ja|en] reply --thread <id> (<本文> | --file <path>)\n       reportboard [--lang ja|en] --close <名前>\n       reportboard [--lang ja|en] --list",
     badLang: (source: string, value: string) => `${source} は ja か en で指定してください: ${value}`,
     badTargetName: "--target の名前は英数字と . _ - だけで指定してください",
     oneFile: "開く Markdown ファイルを 1 つだけ指定してください",
@@ -50,9 +61,15 @@ const MESSAGES = {
       `表示を確認できませんでした (target=${target ?? "(名前なし)"}, ${replaced ? "差し替え" : "新規"})`,
     notOpen: (target: string) => `target=${target} のウィンドウは開いていません`,
     badStateDir: (dir: string) => `${dir} が自分の所有する権限 700 のディレクトリではありません。中身を確かめて削除してください`,
+    badTimeout: "--timeout は正の秒数で指定してください",
+    windowClosed: (target: string) => `target=${target} のウィンドウが閉じられました`,
+    waitTimeout: (target: string) => `target=${target} から指示が来ないまま --timeout が過ぎました`,
+    replyUsage: "reply は --thread <id> と、本文か --file <path> を指定してください",
+    threadNotFound: (id: string) => `スレッドが見つかりません: ${id}`,
+    emptyReply: "返事の本文が空です",
   },
   en: {
-    usage: "usage: reportboard [--lang ja|en] [--target <name>] <file.md>\n       reportboard [--lang ja|en] --close <name>\n       reportboard [--lang ja|en] --list",
+    usage: "usage: reportboard [--lang ja|en] [--target <name>] <file.md>\n       reportboard [--lang ja|en] wait --target <name> [--timeout <seconds>]\n       reportboard [--lang ja|en] reply --thread <id> (<text> | --file <path>)\n       reportboard [--lang ja|en] --close <name>\n       reportboard [--lang ja|en] --list",
     badLang: (source: string, value: string) => `${source} must be ja or en: ${value}`,
     badTargetName: "--target names may use only letters, digits and . _ -",
     oneFile: "Give exactly one Markdown file to open",
@@ -65,6 +82,12 @@ const MESSAGES = {
       `Could not confirm that the window showed the file (target=${target ?? "(unnamed)"}, ${replaced ? "replaced" : "new window"})`,
     notOpen: (target: string) => `No window is open for target=${target}`,
     badStateDir: (dir: string) => `${dir} is not a directory owned by you with mode 700. Check its contents and delete it`,
+    badTimeout: "--timeout must be a positive number of seconds",
+    windowClosed: (target: string) => `The window target=${target} was closed`,
+    waitTimeout: (target: string) => `No instruction came from target=${target} before --timeout`,
+    replyUsage: "reply needs --thread <id> and either the text or --file <path>",
+    threadNotFound: (id: string) => `Thread not found: ${id}`,
+    emptyReply: "The reply is empty",
   },
 } satisfies Record<Lang, unknown>;
 
@@ -86,6 +109,9 @@ async function main(argv: string[]) {
     host.listTargets();
     return;
   }
+
+  if (argv[0] === "wait") process.exit(await outbox.wait({ args: argv.slice(1), messages: i18n.M, usageError, isTargetName: isValidTargetName }));
+  if (argv[0] === "reply") process.exit(reply(argv.slice(1)));
 
   host.sweepStaleFiles();
   let target: string | null = null;
@@ -112,6 +138,25 @@ function checkedTextFile(arg: string): string {
   closeSync(fd);
   if (head.includes(0)) fatal(i18n.M.notText(path));
   return path;
+}
+
+function reply(args: string[]): number {
+  let threadId: string | null = null;
+  let filePath: string | null = null;
+  const words: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--thread") threadId = args[++i] ?? null;
+    else if (args[i] === "--file") filePath = args[++i] ?? null;
+    else words.push(args[i]);
+  }
+  if (threadId === null || (filePath === null) === (words.length === 0)) usageError(i18n.M.replyUsage);
+  if (filePath !== null && !existsSync(resolve(filePath))) fatal(i18n.M.notFound(resolve(filePath)));
+  const text = (filePath === null ? words.join(" ") : readFileSync(resolve(filePath), "utf8")).trim();
+  if (text === "") fatal(i18n.M.emptyReply);
+  const result = addReply({ home: HOME, threadId, text });
+  if (result === null) fatal(i18n.M.threadNotFound(threadId));
+  console.log(`replied thread=${threadId} file=${result.file}`);
+  return 0;
 }
 
 // ---------------- Showing the window ----------------
@@ -168,17 +213,35 @@ function runWindow(config: WindowConfig) {
   // The open file and its state on disk when last rendered. Used to follow changes to the file
   let currentPath: string | null = null;
   let lastStamp: DiskStamp = null;
+  let lastThreadsStamp: DiskStamp = null;
+  let sections: ReturnType<typeof renderReport>["sections"] = [];
+  if (config.target !== null) outbox.prepare(config.target);
+  const canTalk = config.target !== null;
+
+  const threadsNow = () => {
+    if (currentPath === null) return [];
+    lastThreadsStamp = stampOf(threadsPath(HOME, currentPath));
+    return placeThreads(readThreads(HOME, currentPath).threads, sections);
+  };
+  const renderNow = (path: string) => {
+    const report = renderFile(path);
+    sections = report.sections;
+    return { ...report, canTalk, threads: threadsNow() };
+  };
 
   const webview = new Webview();
   webview.title = config.target === null ? "reportboard" : `reportboard — ${config.target}`;
   webview.size = { width: 1440, height: 900, hint: SizeHint.NONE };
+  // For verification: inject a script that drives the page in the real window (docs/reportboard-development.md). Not used normally
+  const devInit = process.env.REPORTBOARD_DEV_INIT_SCRIPT;
+  if (devInit) webview.init(readFileSync(devInit, "utf8"));
 
   // Bun's event loop is stopped during run(), so callbacks use synchronous I/O only
   webview.bind("__reportboardLoad", (rid: string) => {
     const board = host.takeBoard<Board>(rid);
     currentPath = board.path;
     lastStamp = stampOf(board.path);
-    const report = renderFile(board.path);
+    const report = renderNow(board.path);
     webview.title = `${report.title ?? basename(board.path)} — reportboard${config.target === null ? "" : ` ${config.target}`}`;
     return report;
   });
@@ -190,23 +253,48 @@ function runWindow(config: WindowConfig) {
   // Called by the page every 500 ms. Returns a replace request, and a new rendering when the file changed on disk
   webview.bind("__reportboardPoll", () => {
     const replaceUrl = config.target === null ? null : host.takeReplaceRequest(config.target);
-    let report: ReturnType<typeof renderFile> | null = null;
+    let report: ReturnType<typeof renderNow> | null = null;
+    let threads: ReturnType<typeof threadsNow> | null = null;
     let missing = false;
     if (currentPath !== null) {
       const stamp = stampOf(currentPath);
       missing = stamp === null;
       if (stamp !== null && !sameStamp(stamp, lastStamp)) {
         lastStamp = stamp;
-        report = renderFile(currentPath);
+        report = renderNow(currentPath);
+      } else if (!sameStamp(stampOf(threadsPath(HOME, currentPath)), lastThreadsStamp)) {
+        threads = threadsNow();
       }
     }
-    return { replaceUrl, report, missing };
+    const waiting = config.target !== null && outbox.waiterAlive(config.target);
+    return { replaceUrl, report, threads, missing, waiting };
   });
 
-  // Links leave the window: web pages and other files open in their default app
+  // The user sends something from a section: append it to the thread and queue it for `wait`
+  webview.bind("__reportboardSend", (payload: { threadId: string | null; section: SectionRef; text: string }) => {
+    if (config.target === null || currentPath === null) return { ok: false, error: "no target" };
+    try {
+      const thread = addUserMessage({ home: HOME, reportPath: currentPath, threadId: payload.threadId, section: payload.section, text: payload.text });
+      outbox.send(config.target, {
+        file: currentPath,
+        section: { level: thread.heading.level, heading: thread.heading.text },
+        thread: { id: thread.id, messages: thread.messages },
+        instruction: payload.text,
+        reply: `reportboard reply --thread ${thread.id} --file <path>`,
+        sentAt: thread.messages[thread.messages.length - 1].at,
+      });
+      return { ok: true, threadId: thread.id, threads: threadsNow() };
+    } catch (error) {
+      return { ok: false, error: (error as Error).message };
+    }
+  });
+
+  // Links leave the window. Web pages open in the browser. A local file is only revealed in Finder, never opened,
+  // because `open` would launch an app or a script that a link in the Markdown points at
   webview.bind("__reportboardOpen", (href: string) => {
-    const target = /^[a-z][a-z0-9+.-]*:/i.test(href) || currentPath === null ? href : resolve(dirname(currentPath), href.split("#")[0]);
-    const result = spawnSync("open", [target]);
+    const args = openArgsFor(href, currentPath);
+    if (args === null) return { ok: false };
+    const result = spawnSync("open", args);
     return { ok: result.status === 0 };
   });
 
@@ -225,6 +313,13 @@ function renderFile(path: string) {
   const markdown = readFileSync(path, "utf8");
   const stat = statSync(path);
   return { path, name: basename(path), dir: dirname(path), modifiedAt: stat.mtimeMs, ...renderReport(markdown, { baseDir: dirname(path) }) };
+}
+
+export function openArgsFor(href: string, reportPath: string | null): string[] | null {
+  if (/^(https?:\/\/|mailto:)/i.test(href)) return [href];
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href) || reportPath === null) return null;
+  const path = resolve(dirname(reportPath), decodeURIComponent(href.split("#")[0]));
+  return existsSync(path) ? ["-R", path] : null;
 }
 
 function stampOf(path: string): DiskStamp {

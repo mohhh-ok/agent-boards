@@ -203,6 +203,55 @@
   .report td.num .num-value { display: block; font-weight: 700; }
   .report td.num .bar { width: 72px; margin: 4px 0 2px auto; }
 
+  /* ---- conversations with the AI, per section ---- */
+  .section-heading { display: flex; align-items: baseline; gap: 16px; }
+  .section-heading .heading-text { flex: 0 1 auto; }
+  .ask-ai {
+    flex: none;
+    font: inherit; font-size: 13px; font-weight: 400; line-height: 1.4;
+    color: var(--accent);
+    background: none; border: 0; padding: 2px 0; cursor: pointer;
+    text-decoration: underline; text-underline-offset: 3px;
+  }
+  .ask-ai:hover { color: var(--text); }
+  .thread {
+    max-width: 54em;
+    margin: 4px 0 18px;
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    background: var(--bar-bg);
+  }
+  .thread[hidden] { display: none; }
+  .thread-origin { padding: 10px 14px 0; font-size: 13px; color: var(--sub); }
+  .thread-messages { list-style: none; margin: 0; padding: 4px 0; }
+  .thread-messages:empty { display: none; }
+  .message-item { margin: 0; padding: 8px 14px; }
+  .message-item + .message-item { border-top: 1px solid var(--line); }
+  .message-head { display: flex; gap: 10px; align-items: baseline; font-size: 13px; color: var(--sub); }
+  .message-from { font-weight: 700; color: var(--text); }
+  .message-item.from-ai .message-from { color: var(--accent); }
+  .message-text { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 2px; }
+  .composer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 10px; padding: 10px 14px 12px; border-top: 1px solid var(--line); }
+  .thread-messages:empty + .composer { border-top: 0; }
+  .composer textarea {
+    font: inherit; color: var(--text); background: var(--page);
+    border: 1px solid var(--line); border-radius: 4px;
+    padding: 7px 10px; resize: vertical; min-height: 38px; line-height: 1.6;
+  }
+  .composer textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .send-button {
+    align-self: start;
+    font: inherit; font-size: 14px; font-weight: 600;
+    color: #fff; background: var(--accent);
+    border: 0; border-radius: 4px; padding: 8px 14px; cursor: pointer;
+  }
+  @media (prefers-color-scheme: dark) { .send-button { color: #10131a; } }
+  .send-button:disabled { opacity: 0.5; cursor: default; }
+  .composer-status { grid-column: 1 / -1; font-size: 13px; color: var(--sub); }
+  .composer-status.is-error { color: var(--warn); }
+  .orphans h2 { display: block; }
+
   /* ---- states ---- */
   .message { max-width: 40em; margin: 64px auto; color: var(--sub); text-align: center; }
   .message.is-error { color: var(--warn); }
@@ -235,6 +284,20 @@ const STRINGS = {
     less: "閉じる",
     openAll: "内訳をすべて開く",
     closeAll: "内訳をすべて閉じる",
+    ask: "AI に聞く",
+    conversation: (n) => `AI とのやり取り（${n}）`,
+    hideConversation: "やり取りを閉じる",
+    you: "あなた",
+    ai: "AI",
+    placeholder: "このセクションについて AI に指示・質問する。Enter で送る、Shift+Enter で改行",
+    send: "送る",
+    sending: "送っています…",
+    waiting: "AI は受け取り待ちをしています",
+    notWaiting: "AI は今、受け取り待ちをしていません。送った指示は次に AI が受け取ります",
+    awaitingReply: "送りました。AI の返事はここに出ます",
+    sendFailed: (e) => `送れませんでした: ${e}`,
+    orphans: "見出しが見つからないやり取り",
+    orphanOrigin: (h) => `元の見出し: ${h}`,
   },
   en: {
     loading: "Loading…",
@@ -247,6 +310,20 @@ const STRINGS = {
     less: "Show less",
     openAll: "Open all details",
     closeAll: "Close all details",
+    ask: "Ask the AI",
+    conversation: (n) => `Conversation with the AI (${n})`,
+    hideConversation: "Hide the conversation",
+    you: "You",
+    ai: "AI",
+    placeholder: "Ask or instruct the AI about this section. Enter to send, Shift+Enter for a new line",
+    send: "Send",
+    sending: "Sending…",
+    waiting: "The AI is waiting for your message",
+    notWaiting: "The AI is not waiting right now. It will receive what you send next time it waits",
+    awaitingReply: "Sent. The AI's reply will appear here",
+    sendFailed: (e) => `Could not send: ${e}`,
+    orphans: "Conversations whose heading is gone",
+    orphanOrigin: (h) => `Original heading: ${h}`,
   },
 };
 const params = new URLSearchParams(location.search);
@@ -280,6 +357,7 @@ function render(report, { keepOpen }) {
   document.getElementById("file").textContent = report.name;
   document.getElementById("dir").textContent = report.dir;
   document.title = report.title ?? report.name;
+  const focusedKey = document.activeElement?.closest?.(".thread")?.dataset.key ?? null;
   $report.innerHTML = report.html;
 
   $tocList.replaceChildren(
@@ -319,9 +397,210 @@ function render(report, { keepOpen }) {
     tools.append(all);
     ledger.before(tools);
   }
+  sections = report.sections;
+  canTalk = report.canTalk;
+  buildThreadPanels();
+  renderThreads(report.threads);
+  if (focusedKey !== null) document.querySelector(`.thread[data-key="${CSS.escape(focusedKey)}"] textarea`)?.focus();
   measureRows();
   updateCurrentSection();
 }
+
+// ---------------- Conversations with the AI ----------------
+let sections = [];
+let canTalk = false;
+let threads = [];
+let aiWaiting = false;
+// Kept across re-renders: what the user is typing, which panels are open, and where the focus was
+const drafts = new Map();
+const openPanels = new Set();
+const sentAwaiting = new Set();
+const seenPanels = new Set();
+
+function panelKey(section) {
+  return `h${section.level}:${section.occurrence}:${section.text}`;
+}
+
+function buildThreadPanels() {
+  document.getElementById("orphans")?.remove();
+  if (!canTalk) return;
+  for (const section of sections) {
+    const heading = document.getElementById(section.id);
+    if (!heading) continue;
+    const text = document.createElement("span");
+    text.className = "heading-text";
+    text.append(...heading.childNodes);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "ask-ai";
+    button.dataset.section = section.id;
+    heading.append(text, button);
+    heading.after(makePanel({ key: panelKey(section), section, threadId: null }));
+  }
+}
+
+function makePanel({ key, section, threadId, origin }) {
+  const panel = document.createElement("div");
+  panel.className = "thread";
+  panel.dataset.key = key;
+  panel.hidden = !openPanels.has(key);
+  if (origin) {
+    const p = document.createElement("p");
+    p.className = "thread-origin";
+    p.textContent = T.orphanOrigin(origin);
+    panel.append(p);
+  }
+  const list = document.createElement("ol");
+  list.className = "thread-messages";
+  const composer = document.createElement("form");
+  composer.className = "composer";
+  const box = document.createElement("textarea");
+  box.rows = 1;
+  box.placeholder = T.placeholder;
+  box.value = drafts.get(key) ?? "";
+  box.addEventListener("input", () => drafts.set(key, box.value));
+  box.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      composer.requestSubmit();
+    }
+  });
+  const send = document.createElement("button");
+  send.type = "submit";
+  send.className = "send-button";
+  send.textContent = T.send;
+  const status = document.createElement("p");
+  status.className = "composer-status";
+  status.setAttribute("aria-live", "polite");
+  composer.append(box, send, status);
+  composer.addEventListener("submit", (event) => {
+    event.preventDefault();
+    sendFrom(panel);
+  });
+  panel.append(list, composer);
+  panel._section = section;
+  panel._threadId = threadId;
+  return panel;
+}
+
+async function sendFrom(panel) {
+  const box = panel.querySelector("textarea");
+  const text = box.value.trim();
+  if (text === "") return;
+  const button = panel.querySelector(".send-button");
+  const status = panel.querySelector(".composer-status");
+  button.disabled = true;
+  status.className = "composer-status";
+  status.textContent = T.sending;
+  try {
+    const result = await window.__reportboardSend({ threadId: panel._threadId, section: panel._section, text });
+    if (!result.ok) throw new Error(result.error);
+    box.value = "";
+    drafts.delete(panel.dataset.key);
+    sentAwaiting.add(panel.dataset.key);
+    renderThreads(result.threads);
+  } catch (error) {
+    status.className = "composer-status is-error";
+    status.textContent = T.sendFailed(error?.message ?? error);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderThreads(next) {
+  threads = next ?? [];
+  if (!canTalk) return;
+  const placed = new Map();
+  const orphans = [];
+  for (const thread of threads) {
+    if (thread.sectionId === null) orphans.push(thread);
+    else placed.set(thread.sectionId, thread);
+  }
+  for (const section of sections) {
+    const panel = document.querySelector(`.thread[data-key="${CSS.escape(panelKey(section))}"]`);
+    if (panel) fillPanel(panel, placed.get(section.id) ?? null);
+  }
+  let box = document.getElementById("orphans");
+  if (orphans.length === 0) {
+    box?.remove();
+  } else {
+    if (!box) {
+      box = document.createElement("section");
+      box.id = "orphans";
+      box.className = "orphans";
+      const h = document.createElement("h2");
+      h.textContent = T.orphans;
+      box.append(h);
+      $report.append(box);
+    }
+    for (const thread of orphans) {
+      const key = `thread:${thread.id}`;
+      let panel = box.querySelector(`.thread[data-key="${CSS.escape(key)}"]`);
+      if (!panel) {
+        openPanels.add(key);
+        panel = makePanel({ key, section: thread.heading, threadId: thread.id, origin: thread.heading.text });
+        box.append(panel);
+      }
+      fillPanel(panel, thread);
+    }
+  }
+  updateWaiting();
+}
+
+function fillPanel(panel, thread) {
+  const key = panel.dataset.key;
+  panel._threadId = thread?.id ?? panel._threadId ?? null;
+  const messages = thread?.messages ?? [];
+  if (messages.length > 0 && messages[messages.length - 1].from === "ai") sentAwaiting.delete(key);
+  if (messages.length > 0 && !seenPanels.has(key)) {
+    // A section that already has a conversation shows it, once; after that the user decides
+    openPanels.add(key);
+    seenPanels.add(key);
+  }
+  panel.hidden = !openPanels.has(key);
+  const list = panel.querySelector(".thread-messages");
+  list.replaceChildren(
+    ...messages.map((m) => {
+      const li = document.createElement("li");
+      li.className = `message-item from-${m.from}`;
+      const head = document.createElement("div");
+      head.className = "message-head";
+      const from = document.createElement("span");
+      from.className = "message-from";
+      from.textContent = m.from === "ai" ? T.ai : T.you;
+      const at = document.createElement("time");
+      at.textContent = timeOf(Date.parse(m.at));
+      head.append(from, at);
+      const text = document.createElement("div");
+      text.className = "message-text";
+      text.textContent = m.text;
+      li.append(head, text);
+      return li;
+    }),
+  );
+  const button = document.querySelector(`.ask-ai[data-section="${panel.previousElementSibling?.id ?? ""}"]`);
+  if (button) button.textContent = panel.hidden ? (messages.length > 0 ? T.conversation(messages.length) : T.ask) : T.hideConversation;
+}
+
+function updateWaiting() {
+  for (const panel of document.querySelectorAll(".thread")) {
+    const status = panel.querySelector(".composer-status");
+    if (status.classList.contains("is-error") || status.textContent === T.sending) continue;
+    status.textContent = sentAwaiting.has(panel.dataset.key) ? T.awaitingReply : aiWaiting ? T.waiting : T.notWaiting;
+  }
+}
+
+document.addEventListener("click", (event) => {
+  const button = event.target.closest(".ask-ai");
+  if (!button) return;
+  const panel = document.getElementById(button.dataset.section)?.nextElementSibling;
+  if (!panel?.classList.contains("thread")) return;
+  const key = panel.dataset.key;
+  if (openPanels.has(key)) openPanels.delete(key);
+  else openPanels.add(key);
+  renderThreads(threads);
+  if (!panel.hidden) panel.querySelector("textarea").focus();
+});
 
 // A row can be opened only when its details are longer than the two lines shown
 function measureRows() {
@@ -406,6 +685,11 @@ async function poll() {
       location.replace(result.replaceUrl);
       return;
     }
+    if (result.waiting !== aiWaiting) {
+      aiWaiting = result.waiting;
+      updateWaiting();
+    }
+    if (result.threads) renderThreads(result.threads);
     if (result.missing) setStatus(T.missing, "warn");
     else if (result.report) {
       const y = window.scrollY;
