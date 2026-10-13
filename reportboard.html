@@ -145,7 +145,7 @@
 
   /* ---- ledger: "<name> — <number> <unit>. details" lists ---- */
   .ledger-tools { scroll-margin-top: 56px; display: flex; justify-content: space-between; align-items: baseline; gap: 16px; margin: -6px 0 4px; }
-  .ledger-scale { font-size: 13px; color: var(--sub); }
+  .ledger-scale { font-size: 14px; color: var(--text); }
   .text-button {
     font: inherit; font-size: 13px; color: var(--accent);
     background: none; border: 0; padding: 2px 0; cursor: pointer;
@@ -157,7 +157,8 @@
     display: grid;
     grid-template-columns: 7.5em minmax(14em, 22em) minmax(0, 1fr) 20px;
     column-gap: 24px;
-    align-items: start;
+    /* The number, the name and the first line of the details share one baseline */
+    align-items: first baseline;
     margin: 0;
     padding: 7px 8px;
     border-bottom: 1px solid var(--line);
@@ -170,8 +171,8 @@
   .ledger-num { font-size: 20px; line-height: 1.3; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--accent); }
   .ledger-unit { font-size: 13px; color: var(--sub); }
   .ledger-value .bar { grid-column: 1 / -1; margin-top: 6px; }
-  .ledger-name { font-weight: 600; line-height: 1.55; padding-top: 2px; }
-  .ledger-body { line-height: 1.6; padding-top: 2px; }
+  .ledger-name { font-weight: 600; line-height: 1.55; }
+  .ledger-body { line-height: 1.6; }
   .ledger-row:not(.is-open) .ledger-name,
   .ledger-row:not(.is-open) .ledger-text {
     display: -webkit-box;
@@ -181,6 +182,7 @@
   }
   .ledger-more {
     grid-column: 4; grid-row: 1;
+    align-self: start;
     width: 20px; height: 26px; padding: 0;
     background: none; border: 0; cursor: pointer;
     color: var(--sub);
