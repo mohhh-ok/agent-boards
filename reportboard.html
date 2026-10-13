@@ -95,7 +95,9 @@
 
   /* ---- report body ---- */
   .report { padding: 28px 0 96px; min-width: 0; }
-  .report > :is(p, ul, ol:not(.ledger), blockquote, h1, h2, h3, h4, pre, hr) { max-width: 54em; }
+  /* Running text stops at a reading width; rules, tables, breakdowns and conversation boxes use the whole column,
+     so every line and box ends at the same right edge */
+  .report > p, .report > ul, .report > ol:not(.ledger), .report > blockquote, .report > pre { max-width: 54em; }
   .report h1.report-title { font-size: 26px; line-height: 1.4; margin: 4px 0 16px; font-weight: 700; }
   .report h1:not(.report-title) { font-size: 22px; margin: 40px 0 12px; }
   .report h2 {
@@ -161,7 +163,8 @@
   }
   .ledger-row.has-more { cursor: pointer; }
   .ledger-row.has-more:hover { background: var(--hover); }
-  .ledger-value { display: grid; grid-template-columns: auto 1fr; align-items: baseline; column-gap: 4px; }
+  .ledger-value { display: grid; grid-template-columns: 2.6em 1fr; align-items: baseline; column-gap: 5px; }
+  .ledger-num { text-align: right; }
   .ledger-num { font-size: 20px; line-height: 1.3; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--accent); }
   .ledger-unit { font-size: 13px; color: var(--sub); }
   .ledger-value .bar { grid-column: 1 / -1; margin-top: 6px; }
@@ -196,7 +199,7 @@
 
   /* ---- tables ---- */
   .table-wrap { overflow-x: auto; margin: 4px 0 20px; }
-  .report table { border-collapse: collapse; font-size: 14px; line-height: 1.6; min-width: 50%; }
+  .report table { border-collapse: collapse; font-size: 14px; line-height: 1.6; width: 100%; }
   .report th, .report td { padding: 8px 14px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
   .report thead th { font-weight: 600; color: var(--sub); border-bottom: 2px solid var(--line); white-space: nowrap; }
   .report th.num, .report td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -215,7 +218,6 @@
   }
   .ask-ai:hover { color: var(--text); }
   .thread {
-    max-width: 54em;
     margin: 4px 0 18px;
     border: 1px solid var(--line);
     border-left: 3px solid var(--accent);
@@ -292,8 +294,8 @@ const STRINGS = {
     placeholder: "このセクションについて AI に指示・質問する。Enter で送る、Shift+Enter で改行",
     send: "送る",
     sending: "送っています…",
-    waiting: "AI は受け取り待ちをしています",
-    notWaiting: "AI は今、受け取り待ちをしていません。送った指示は次に AI が受け取ります",
+    waiting: "AI が受け取り待ちです。送るとすぐ届きます",
+    notWaiting: "AI は今、受け取り待ちではありません。送った内容は保存され、AI が次に確認したときに届きます",
     awaitingReply: "送りました。AI の返事はここに出ます",
     sendFailed: (e) => `送れませんでした: ${e}`,
     orphans: "見出しが見つからないやり取り",
@@ -318,8 +320,8 @@ const STRINGS = {
     placeholder: "Ask or instruct the AI about this section. Enter to send, Shift+Enter for a new line",
     send: "Send",
     sending: "Sending…",
-    waiting: "The AI is waiting for your message",
-    notWaiting: "The AI is not waiting right now. It will receive what you send next time it waits",
+    waiting: "The AI is waiting. What you send reaches it right away",
+    notWaiting: "The AI is not waiting right now. What you send is kept and reaches it the next time it checks",
     awaitingReply: "Sent. The AI's reply will appear here",
     sendFailed: (e) => `Could not send: ${e}`,
     orphans: "Conversations whose heading is gone",
