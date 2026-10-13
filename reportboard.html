@@ -63,10 +63,16 @@
   .topbar .changes-jump { white-space: nowrap; }
   .topbar .changes-jump[hidden] { display: none; }
   /* What changed in the last reload: a bar on the left and a light tint, until the next reload */
-  .report .is-changed { background: var(--changed); box-shadow: inset 3px 0 0 var(--accent); }
-  .report tr.is-changed { box-shadow: none; }
-  .report tr.is-changed > td { background: var(--changed); }
-  .report tr.is-changed > td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+  /* The mark sits in the gutter left of the block, so it never covers the text; the bar is the same distance from
+     the column's edge for every kind of block. A list item reaches over its bullet too */
+  .report .is-changed, .report tr.is-changed > td:first-child {
+    --mark-reach: 12px;
+    box-shadow: calc(-1 * var(--mark-reach)) 0 0 var(--changed), calc(-3px - var(--mark-reach)) 0 0 var(--accent);
+  }
+  .report .is-changed, .report tr.is-changed > td { background: var(--changed); }
+  .report li.is-changed:not(.ledger-row) { --mark-reach: calc(1.4em + 12px); }
+  .report tr.is-changed { box-shadow: none; background: none; }
+  .report blockquote.note.is-changed { border-left-color: transparent; }
 
   /* ---- layout ---- */
   .shell {
@@ -232,7 +238,8 @@
   }
 
   /* ---- tables ---- */
-  .table-wrap { overflow-x: auto; margin: 4px 0 20px; }
+  /* Room on the left for the mark of a changed row, which the scroll box would clip; the table stays in the column */
+  .table-wrap { overflow-x: auto; margin: 4px 0 20px -15px; padding-left: 15px; }
   .report table { border-collapse: collapse; font-size: 14px; line-height: 1.6; width: 100%; }
   .report th, .report td { padding: 8px 14px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
   .report thead th { font-weight: 600; color: var(--sub); border-bottom: 2px solid var(--line); white-space: nowrap; }
@@ -785,7 +792,8 @@ let changeIndex = 0;
 const $jump = document.getElementById("changes-jump");
 
 function blocksNow() {
-  return [...$report.querySelectorAll(BLOCKS)].filter((el) => !el.closest(".thread") && !el.closest("thead"));
+  // A changed detail of a breakdown row marks the row: a closed row hides its details
+  return [...$report.querySelectorAll(BLOCKS)].filter((el) => !el.closest(".thread, thead, .ledger-text"));
 }
 
 // The report's own text: the buttons and conversation boxes inside a heading or a breakdown row are left out

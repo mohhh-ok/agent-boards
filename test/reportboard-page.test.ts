@@ -8,12 +8,21 @@ import { renderReport } from "../lib/report.ts";
 const PAGE = readFileSync(resolve(import.meta.dir, "../reportboard.html"), "utf8");
 const windows: Window[] = [];
 
-async function openPage(md: string, threads: unknown[]) {
-  const report = { path: "/r/report.md", name: "report.md", dir: "/r", modifiedAt: 0, ...renderReport(md, { baseDir: "/r" }), canTalk: true, threads };
+// next: the report as edited later; the first poll delivers it, as when the file changes on disk
+async function openPage(md: string, threads: unknown[], next?: string) {
+  const reportOf = (text: string, modifiedAt: number) =>
+    ({ path: "/r/report.md", name: "report.md", dir: "/r", modifiedAt, ...renderReport(text, { baseDir: "/r" }), canTalk: true, threads });
+  const report = reportOf(md, 0);
+  const edited = next === undefined ? null : reportOf(next, 1);
   const stubs = `<script>
 window.__reportboardLoad = async () => (${JSON.stringify(report).replaceAll("</", "<\\/")});
 window.__reportboardReady = async () => {};
-window.__reportboardPoll = async () => ({ replaceUrl: null, report: null, threads: null, missing: false, waiting: false });
+let pendingEdit = ${JSON.stringify(edited).replaceAll("</", "<\\/")};
+window.__reportboardPoll = async () => {
+  const report = pendingEdit;
+  pendingEdit = null;
+  return { replaceUrl: null, report, threads: null, missing: false, waiting: false };
+};
 </script>`;
   const window = new Window({
     url: "http://localhost/?rid=test&lang=en",
@@ -58,5 +67,15 @@ describe("reportboard page", () => {
     const other = document.getElementById("row-2")!.querySelector(".ledger-more")!;
     expect(other.getAttribute("aria-label")).toBe("Read more");
     expect(more.className).toBe(other.className);
+  });
+
+  test("a changed detail of a breakdown row marks the row, which shows even while the row is closed", async () => {
+    const md = "## Breakdown\n\n- A. Camera — 4.5 days\n  - Screen 1.5\n  - Tests 1\n- B. Brand kit — 9 days\n  - Logo 3\n";
+    const document = await openPage(md, [], md.replace("Tests 1", "Tests and devices 1"));
+    for (let i = 0; i < 200 && document.querySelector(".is-changed") === null; i++) await Bun.sleep(10);
+    const marked = [...document.querySelectorAll(".is-changed")];
+    expect(marked.length).toBe(1);
+    expect(marked[0].classList.contains("ledger-row")).toBe(true);
+    expect(marked[0].textContent).toContain("A. Camera");
   });
 });
