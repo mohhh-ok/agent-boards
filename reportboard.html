@@ -19,6 +19,8 @@
     --warn-bg: #fff3e8;
     --hover: #f4f6f9;
     --changed: #eaf0fd;
+    --mine: #e3ebfb;
+    --mine-line: #c9d6f2;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -34,6 +36,8 @@
       --warn-bg: #3a2416;
       --hover: #1c1f24;
       --changed: #1f2a44;
+      --mine: #233256;
+      --mine-line: #31446f;
     }
   }
   * { box-sizing: border-box; }
@@ -226,7 +230,8 @@
   .ledger-body > .edit-with-ai { display: block; margin-top: 6px; }
   .ledger-row:not(.is-open) > .ledger-body > .edit-with-ai,
   .ledger-row:not(.is-open) > .thread { display: none; }
-  .ledger-row > .thread { grid-column: 1 / -1; margin: 10px 0 4px; cursor: auto; }
+  /* Out to the row's edges (its 8px padding), so it lines up with the conversation boxes under the headings */
+  .ledger-row > .thread { grid-column: 1 / -1; margin: 10px -8px 4px; cursor: auto; }
   @media (max-width: 860px) {
     .ledger-row { grid-template-columns: 6.5em minmax(0, 1fr) 20px; }
     .ledger-body { grid-column: 2; }
@@ -269,20 +274,29 @@
   .thread[hidden] { display: none; }
   .thread-origin { padding: 10px 14px 0; font-size: 13px; color: var(--sub); }
   /* Long conversations scroll inside the box (kept at the latest message), so the section's content stays in view */
-  .thread-messages { list-style: none; margin: 0; padding: 4px 0; max-height: 15em; overflow-y: auto; }
+  .thread-messages { list-style: none; margin: 0; padding: 10px 14px 6px; max-height: 20em; overflow-y: auto; display: flex; flex-direction: column; }
   .thread-messages:empty { display: none; }
-  .message-item { margin: 0; padding: 8px 14px; }
-  .message-item + .message-item { border-top: 1px solid var(--line); }
-  .message-head { display: flex; gap: 10px; align-items: baseline; font-size: 13px; color: var(--sub); }
-  .message-from { font-weight: 700; color: var(--text); }
-  .message-item.from-ai .message-from { color: var(--accent); }
-  .message-text { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 2px; }
-  /* The AI's messages in a row read as one reply: no line between them and no repeated name */
-  .message-item.is-continued { padding-top: 0; }
-  .message-item + .message-item.is-continued { border-top: 0; }
+  /* A chat: what the user sent on the right, the AI's replies on the left. The side says who it is, so only the AI's name is shown */
+  .thread-messages > .message-item { margin: 0; max-width: min(85%, 46em); display: flex; flex-direction: column; }
+  .message-item.from-user { align-self: flex-end; align-items: flex-end; }
+  .message-item.from-ai { align-self: flex-start; align-items: flex-start; }
+  .thread-messages > .message-item + .message-item { margin-top: 12px; }
+  .message-head { display: flex; gap: 10px; align-items: baseline; font-size: 12px; line-height: 1.5; color: var(--sub); margin: 0 4px 3px; }
+  .message-from { font-weight: 700; color: var(--accent); }
+  .message-item.from-user .message-from { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .message-text {
+    white-space: pre-wrap; overflow-wrap: anywhere;
+    padding: 7px 12px; border-radius: 8px; line-height: 1.65;
+  }
+  /* The corner on the speaker's side is cut short, so a bubble points to who said it */
+  .message-item.from-user .message-text { background: var(--mine); border: 1px solid var(--mine-line); border-top-right-radius: 2px; }
+  .message-item.from-ai .message-text { background: var(--page); border: 1px solid var(--line); border-top-left-radius: 2px; }
+  /* The AI's messages in a row read as one reply: closer together, the name only on the first */
+  .thread-messages > .message-item.from-ai + .message-item.is-continued { margin-top: 6px; }
   .message-item.is-continued .message-from { display: none; }
+  .message-item.is-continued .message-text { border-top-left-radius: 8px; }
   /* Shown from the moment the AI takes the message until it says it is done (or waits again) */
-  .message-item.is-pending .message-text { color: var(--sub); }
+  .message-item.is-pending .message-text { color: var(--sub); border-style: dashed; }
   .message-item.is-pending.is-continued .message-head { display: none; }
   .pending-dots::after { content: "…"; display: inline-block; animation: pending-dots 1.2s steps(4, end) infinite; overflow: hidden; vertical-align: bottom; width: 1em; }
   @keyframes pending-dots { from { width: 0; } to { width: 1em; } }
@@ -670,6 +684,11 @@ function fillPanel(panel, thread) {
   }
   panel.hidden = !openPanels.has(key);
   const list = panel.querySelector(".thread-messages");
+  // A reply that makes the box taller would push the input below the window; keep it in view if any of it was
+  // (not only if all of it was: the status line under the box can already reach past the bottom edge)
+  const composer = panel.querySelector(".composer");
+  const before = panel.hidden ? null : composer.getBoundingClientRect();
+  const wasInView = before !== null && before.height > 0 && before.top < window.innerHeight && before.bottom > 0;
   const items = messages.map((m, i) => ({ ...m, continued: m.from === "ai" && messages[i - 1]?.from === "ai" }));
   // Under the latest reply while the AI is still at it; it joins the AI's replies right above it
   if (panel._state === "received" || panel._state === "working") {
@@ -703,6 +722,10 @@ function fillPanel(panel, thread) {
     }),
   );
   list.scrollTop = list.scrollHeight;
+  if (wasInView && !panel.hidden) {
+    const overflow = composer.getBoundingClientRect().bottom - window.innerHeight;
+    if (overflow > 0) window.scrollBy(0, overflow + 12);
+  }
   const button = document.querySelector(`.edit-with-ai[data-key="${CSS.escape(key)}"]`);
   if (button) button.textContent = panel.hidden ? (messages.length > 0 ? T.conversation(messages.length) : T.ask) : T.hideConversation;
 }
@@ -790,10 +813,13 @@ function updateCurrentSection() {
     const heading = document.getElementById(a.getAttribute("href").slice(1));
     if (heading && heading.getBoundingClientRect().top < 120) current = a;
   }
-  if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) current = links[links.length - 1];
+  // Scrolled to the end: the last sections may never reach the top. Not at the top of the page, where nothing has been scrolled
+  if (window.scrollY > 0 && window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) current = links[links.length - 1];
   for (const a of links) a.classList.toggle("is-current", a === current);
 }
 window.addEventListener("scroll", updateCurrentSection, { passive: true });
+// Opening a conversation or a row changes the page's height without a scroll
+new ResizeObserver(updateCurrentSection).observe(document.body);
 let resizeTimer = null;
 window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);

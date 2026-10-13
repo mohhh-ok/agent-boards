@@ -43,7 +43,7 @@ The look is fixed by reportboard; the Markdown only says what is in the report. 
 
 ## Revising a section with the AI
 
-In a named window, every `##` and `###` heading has an "Edit with AI" button. It opens a box under the heading: write how the section should change ("add a total row", "shorten this") or a question, and press Enter (Shift+Enter for a new line; the Enter that confirms Japanese or other IME input does not send). When you ask for a change, the agent edits the Markdown, the window reloads it, and the agent's reply in the same box says what it changed. A question gets an answer there. You can keep going in the same box. A section that already has a conversation shows it when the report opens.
+In a named window, every `##` and `###` heading has an "Edit with AI" button. It opens a box under the heading: write how the section should change ("add a total row", "shorten this") or a question, and press Enter (Shift+Enter for a new line; the Enter that confirms Japanese or other IME input does not send). When you ask for a change, the agent edits the Markdown, the window reloads it, and the agent's reply in the same box says what it changed. A question gets an answer there. The box reads like a chat: what you sent on the right, the agent's replies on the left. You can keep going in the same box. A section that already has a conversation shows it when the report opens.
 
 Each row of a breakdown has its own "Edit with AI" too, under its details when the row is open (a row with short details still opens, to show the button). Its box spans the row, and pressing the button or typing in the box does not close the row. What you send there is about that item ("cut the tests to 0.5", "why is this 4.5?").
 
