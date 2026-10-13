@@ -51,7 +51,7 @@ On the agent's side:
 
 ```sh
 reportboard wait --target <name> [--timeout <seconds>]
-reportboard reply --thread <id> "answer"        # or: --file <path>
+reportboard reply --thread <id> [--done] "answer"   # or: --file <path>. --done on the last reply
 ```
 
 `wait` prints what you sent as JSON and exits:
@@ -76,6 +76,8 @@ reportboard reply --thread <id> "answer"        # or: --file <path>
 ```
 
  Exit codes of `wait`: 0 = got one / 1 = the window is not open / 2 = `--timeout` passed / 3 = the window was closed. Messages sent while nobody waits are kept for the next `wait`, and the box tells you whether the AI is waiting.
+
+When `wait` hands a message to the agent, the conversation shows "Got it. Writing a reply", and after the agent's first reply "Still working on it" under the latest reply, until the agent sends its last reply with `reply --done` (or starts the next `wait`). The agent replies at once with what it is going to do, again at each step that takes a while, and last with the result; replies in a row read as one.
 
 The agent edits the report when the message asks for a change and answers when it asks a question; either way it replies in the thread, saying what it changed.
 

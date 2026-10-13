@@ -37,7 +37,7 @@ window.__reportboardPoll = async () => {
   windows.push(window);
   window.document.write(PAGE.replace("<script>", `${stubs}\n<script>`));
   // The page polls forever, so wait for the first rendering (or its error) instead of for the page to settle
-  for (let i = 0; i < 100 && window.document.querySelector(".ledger-row, .message.is-error") === null; i++) await Bun.sleep(10);
+  for (let i = 0; i < 100 && window.document.querySelector(".ledger-row, .thread, .message.is-error") === null; i++) await Bun.sleep(10);
   return window.document;
 }
 
@@ -72,6 +72,41 @@ describe("reportboard page", () => {
     const other = document.getElementById("row-2")!.querySelector(".ledger-more")!;
     expect(other.getAttribute("aria-label")).toBe("Read more");
     expect(more.className).toBe(other.className);
+  });
+
+  test("the AI getting a message shows under the conversation until its reply comes; its replies read as one", async () => {
+    const md = "## Result\n\nText\n";
+    const heading = { level: 2, text: "Result", occurrence: 0 };
+    const user = { from: "user", text: "Fix it", at: "2026-10-13T01:00:00.000Z", receivedAt: "2026-10-13T01:00:01.000Z" };
+    const ai = (text: string, minute: number) => ({ from: "ai", text, at: `2026-10-13T01:0${minute}:00.000Z` });
+    const panelOf = async (thread: Record<string, unknown>) => {
+      const document = await openPage(md, [{ id: "t-1", heading, sectionId: "section-1", ...thread }]);
+      return document.querySelector(".thread")!;
+    };
+
+    const received = await panelOf({ messages: [user], state: "received" });
+    const pending = received.querySelectorAll(".message-item.is-pending");
+    expect(pending.length).toBe(1);
+    expect(pending[0].textContent).toContain("Got it. Writing a reply");
+    expect(received.querySelector(".composer-status")!.textContent).toBe("The AI is working on it. What you add is kept and reaches the AI");
+
+    const sent = await panelOf({ messages: [{ ...user, receivedAt: undefined }], state: "sent" });
+    expect(sent.querySelector(".is-pending")).toBeNull();
+    expect(sent.querySelector(".composer-status")!.textContent).toBe("Sent. The AI's reply will appear here");
+
+    const working = await panelOf({ messages: [user, ai("On it", 1), ai("Checking the table", 2)], state: "working" });
+    const workingItems = [...working.querySelectorAll(".message-item")];
+    expect(workingItems.length).toBe(4);
+    // Under the latest reply, as part of the AI's replies
+    expect(workingItems[3].classList.contains("is-pending")).toBe(true);
+    expect(workingItems[3].classList.contains("is-continued")).toBe(true);
+    expect(workingItems[3].textContent).toContain("Still working on it");
+    expect(working.querySelector(".composer-status")!.textContent).toBe("The AI is working on it. What you add is kept and reaches the AI");
+
+    const replied = await panelOf({ messages: [user, ai("On it", 1), ai("Checking the table", 2), ai("Done", 3)], state: null });
+    expect(replied.querySelector(".is-pending")).toBeNull();
+    expect([...replied.querySelectorAll(".message-item")].map((li) => li.classList.contains("is-continued"))).toEqual([false, false, true, true]);
+    expect(replied.querySelector(".composer-status")!.textContent).not.toContain("working");
   });
 
   test("a changed detail of a breakdown row marks the row, which shows even while the row is closed", async () => {

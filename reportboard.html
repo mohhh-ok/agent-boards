@@ -277,6 +277,16 @@
   .message-from { font-weight: 700; color: var(--text); }
   .message-item.from-ai .message-from { color: var(--accent); }
   .message-text { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 2px; }
+  /* The AI's messages in a row read as one reply: no line between them and no repeated name */
+  .message-item.is-continued { padding-top: 0; }
+  .message-item + .message-item.is-continued { border-top: 0; }
+  .message-item.is-continued .message-from { display: none; }
+  /* Shown from the moment the AI takes the message until it says it is done (or waits again) */
+  .message-item.is-pending .message-text { color: var(--sub); }
+  .message-item.is-pending.is-continued .message-head { display: none; }
+  .pending-dots::after { content: "…"; display: inline-block; animation: pending-dots 1.2s steps(4, end) infinite; overflow: hidden; vertical-align: bottom; width: 1em; }
+  @keyframes pending-dots { from { width: 0; } to { width: 1em; } }
+  @media (prefers-reduced-motion: reduce) { .pending-dots::after { animation: none; } }
   .composer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; padding: 8px 14px 10px; border-top: 1px solid var(--line); }
   .thread-messages:empty + .composer { border-top: 0; }
   .composer textarea {
@@ -352,6 +362,9 @@ const STRINGS = {
     waiting: "AI が受け取り待ちです。送るとすぐ届きます",
     notWaiting: "AI は今、受け取り待ちではありません。送った内容は保存されます。AI との会話で「reportboard を見て」と伝えると届きます",
     awaitingReply: "送りました。AI の返事はここに出ます",
+    received: "受け取りました。返事を書いています",
+    stillWorking: "作業を続けています",
+    working: "AI が作業中です。続けて書いた内容も保存され、AI に届きます",
     sendFailed: (e) => `送れませんでした: ${e}`,
     orphans: "見出しが見つからないやり取り",
     orphanOrigin: (h) => `元の見出し: ${h}`,
@@ -382,6 +395,9 @@ const STRINGS = {
     waiting: "The AI is waiting. What you send reaches it right away",
     notWaiting: "The AI is not waiting right now. What you send is kept; tell the AI \"check reportboard\" in your conversation to deliver it",
     awaitingReply: "Sent. The AI's reply will appear here",
+    received: "Got it. Writing a reply",
+    stillWorking: "Still working on it",
+    working: "The AI is working on it. What you add is kept and reaches the AI",
     sendFailed: (e) => `Could not send: ${e}`,
     orphans: "Conversations whose heading is gone",
     orphanOrigin: (h) => `Original heading: ${h}`,
@@ -489,7 +505,6 @@ let aiWaiting = false;
 // Kept across re-renders: what the user is typing, which panels are open, and where the focus was
 const drafts = new Map();
 const openPanels = new Set();
-const sentAwaiting = new Set();
 const seenPanels = new Set();
 
 function panelKey(section) {
@@ -590,7 +605,6 @@ async function sendFrom(panel) {
     if (!result.ok) throw new Error(result.error);
     box.value = "";
     drafts.delete(panel.dataset.key);
-    sentAwaiting.add(panel.dataset.key);
     status.textContent = "";
     renderThreads(result.threads);
   } catch (error) {
@@ -646,7 +660,7 @@ function fillPanel(panel, thread) {
   const key = panel.dataset.key;
   panel._threadId = thread?.id ?? panel._threadId ?? null;
   const messages = thread?.messages ?? [];
-  if (messages.length > 0 && messages[messages.length - 1].from === "ai") sentAwaiting.delete(key);
+  panel._state = thread?.state ?? null;
   if (messages.length > 0 && !seenPanels.has(key)) {
     // A section that already has a conversation shows it, once; after that the user decides
     openPanels.add(key);
@@ -656,21 +670,34 @@ function fillPanel(panel, thread) {
   }
   panel.hidden = !openPanels.has(key);
   const list = panel.querySelector(".thread-messages");
+  const items = messages.map((m, i) => ({ ...m, continued: m.from === "ai" && messages[i - 1]?.from === "ai" }));
+  // Under the latest reply while the AI is still at it; it joins the AI's replies right above it
+  if (panel._state === "received" || panel._state === "working") {
+    const last = messages[messages.length - 1];
+    const working = panel._state === "working";
+    items.push({ from: "ai", text: working ? T.stillWorking : T.received, at: working ? null : last.receivedAt, continued: working, pending: true });
+  }
   list.replaceChildren(
-    ...messages.map((m) => {
+    ...items.map((m) => {
       const li = document.createElement("li");
-      li.className = `message-item from-${m.from}`;
+      li.className = `message-item from-${m.from}${m.continued ? " is-continued" : ""}${m.pending ? " is-pending" : ""}`;
       const head = document.createElement("div");
       head.className = "message-head";
       const from = document.createElement("span");
       from.className = "message-from";
       from.textContent = m.from === "ai" ? T.ai : T.you;
       const at = document.createElement("time");
-      at.textContent = timeOf(Date.parse(m.at));
+      at.textContent = m.at === null ? "" : timeOf(Date.parse(m.at));
       head.append(from, at);
       const text = document.createElement("div");
       text.className = "message-text";
       text.textContent = m.text;
+      if (m.pending) {
+        const dots = document.createElement("span");
+        dots.className = "pending-dots";
+        dots.setAttribute("aria-hidden", "true");
+        text.append(dots);
+      }
       li.append(head, text);
       return li;
     }),
@@ -684,7 +711,7 @@ function updateWaiting() {
   for (const panel of document.querySelectorAll(".thread")) {
     const status = panel.querySelector(".composer-status");
     if (status.classList.contains("is-error") || status.textContent === T.sending) continue;
-    status.textContent = sentAwaiting.has(panel.dataset.key) ? T.awaitingReply : aiWaiting ? T.waiting : T.notWaiting;
+    status.textContent = panel._state === "sent" ? T.awaitingReply : panel._state === "received" || panel._state === "working" ? T.working : aiWaiting ? T.waiting : T.notWaiting;
   }
 }
 

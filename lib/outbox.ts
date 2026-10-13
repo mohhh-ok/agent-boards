@@ -21,6 +21,8 @@ export type WaitMessages = {
 export function createOutbox(host: WindowHost) {
   const outboxDir = (target: string) => join(host.stateDir, OUTBOX_DIR_NAME, target);
   const waitersDir = (target: string) => join(host.targetsDir, `${target}.waiters`);
+  // When the latest `wait` for the name started (the content is ms since the epoch)
+  const waitStartedPath = (target: string) => join(host.targetsDir, `${target}.wait-started`);
 
   function prepare(target: string): void {
     mkdirSync(outboxDir(target), { recursive: true, mode: 0o700 });
@@ -65,6 +67,15 @@ export function createOutbox(host: WindowHost) {
     return null;
   }
 
+  function lastWaitStarted(target: string): number | null {
+    try {
+      const ms = Number(readFileSync(waitStartedPath(target), "utf8"));
+      return Number.isFinite(ms) ? ms : null;
+    } catch {
+      return null;
+    }
+  }
+
   function waiterAlive(target: string): boolean {
     const dir = waitersDir(target);
     if (!existsSync(dir)) return false;
@@ -83,7 +94,8 @@ export function createOutbox(host: WindowHost) {
 
   // `wait --target <name> [--timeout <sec>]`. Prints the instruction JSON on stdout.
   // Exit codes: 0 = got one / 1 = the window is not open / 2 = --timeout passed / 3 = the window was closed
-  async function wait(params: { args: string[]; messages: WaitMessages; usageError: (message: string) => never; isTargetName: (name: string | undefined) => name is string }): Promise<number> {
+  // onTaken runs with the instruction JSON right after it is printed (reportboard notes there that the AI got it)
+  async function wait(params: { args: string[]; messages: WaitMessages; usageError: (message: string) => never; isTargetName: (name: string | undefined) => name is string; onTaken?: (instruction: string) => void }): Promise<number> {
     const { args, messages: M, usageError } = params;
     let target: string | null = null;
     let timeoutMs: number | null = null;
@@ -99,15 +111,21 @@ export function createOutbox(host: WindowHost) {
       } else usageError(M.badTargetName);
     }
     if (target === null) return usageError(M.badTargetName);
-    return await waitFor(target, timeoutMs, M);
+    return await waitFor(target, timeoutMs, M, params.onTaken ?? (() => {}));
   }
 
-  async function waitFor(target: string, timeoutMs: number | null, M: WaitMessages): Promise<number> {
+  async function waitFor(target: string, timeoutMs: number | null, M: WaitMessages, onTaken: (instruction: string) => void): Promise<number> {
+    writeFileSync(waitStartedPath(target), String(Date.now()));
+    // Print first: if onTaken stalls (a lock) and the process is killed, the instruction has already reached the AI
+    const handOver = (instruction: string) => {
+      process.stdout.write(instruction);
+      onTaken(instruction);
+    };
 
     // Hand over a queued instruction first, even if the window is not open
     const queued = take(target);
     if (queued !== null) {
-      process.stdout.write(queued);
+      handOver(queued);
       return 0;
     }
     if (host.findWindowPid(target) === null) {
@@ -133,7 +151,7 @@ export function createOutbox(host: WindowHost) {
       while (Date.now() < deadline) {
         const instruction = take(target);
         if (instruction !== null) {
-          process.stdout.write(instruction);
+          handOver(instruction);
           return 0;
         }
         if (Date.now() - lastWindowCheck > 1000) {
@@ -152,5 +170,5 @@ export function createOutbox(host: WindowHost) {
     }
   }
 
-  return { outboxDir, waitersDir, prepare, send, pendingIds, take, waiterAlive, wait };
+  return { outboxDir, waitersDir, prepare, send, pendingIds, take, waiterAlive, lastWaitStarted, wait };
 }

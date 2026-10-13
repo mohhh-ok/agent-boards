@@ -18,6 +18,7 @@ Notes for changing the window itself. For usage, see [reportboard.md](reportboar
 - Change marks: before re-rendering, the page counts the text of each block (table row, list item, paragraph, heading, code, note); after, blocks whose text is not among the old ones are marked `.is-changed` (innermost only). Comparison is by text, so a moved block is not marked
 - `__reportboardPoll()` every 500 ms returns a replace URL, a new rendering when the report's mtime/size changed, the threads when only the threads file changed, whether the file is missing, and whether a `wait` is running
 - Sending: `__reportboardSend({ threadId, section, text })` appends to the thread and writes the outbox entry that `wait` prints
+- Received: when `wait` takes an entry, it writes `receivedAt` on that user message in the threads file (`markReceived`). `reply --done` writes `doneAt`, and each `wait` writes its start time to `targets/<name>.wait-started`. Each thread reaches the page with `state` (`threadState`): "sent", "received" (the page adds the "writing a reply" line), "working" (after a reply, the page adds "still working" under it) or null once done or a later `wait` started. The poll re-sends the threads when the wait start time changes
 - Links: `__reportboardOpen(href)` opens http(s)/mailto with `open`, and only reveals existing local files (`open -R`), so a link cannot launch an app or a script
 - Do not `await` a bound function that returns nothing: its promise may never settle
 

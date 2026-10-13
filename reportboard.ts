@@ -4,7 +4,8 @@
 // Usage:
 //   reportboard [--target <name>] <file.md>   Open. If a window with that name exists, switch it to the file
 //   reportboard wait --target <name> [--timeout <sec>]   Wait until the user sends something to the AI from a section; print it as JSON
-//   reportboard reply --thread <id> (<text> | --file <path>)   Answer in that thread. It shows up in the section it was sent from
+//   reportboard reply --thread <id> [--done] (<text> | --file <path>)   Answer in that thread. It shows up in the section it was sent from.
+//                                                      --done on the last reply ends "the AI is working on it" in the window
 //   reportboard --close <name>                Close only the window with that name
 //   reportboard --list                        List the open named windows
 // Every form may start with --lang ja|en (display language; see "Language" in docs/reportboard.md)
@@ -28,7 +29,7 @@ import { applyLang, createI18n, type Lang } from "./lib/lang.ts";
 import { createWindowHost, isValidTargetName } from "./lib/windows.ts";
 import { renderReport } from "./lib/report.ts";
 import { OUTBOX_DIR_NAME, createOutbox } from "./lib/outbox.ts";
-import { addReply, addUserMessage, placeThreads, readThreads, threadsPath, type SectionRef } from "./lib/threads.ts";
+import { addReply, addUserMessage, markReceived, placeThreads, readThreads, threadState, threadsPath, type SectionRef } from "./lib/threads.ts";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const htmlPath = resolve(dirname(scriptPath), "reportboard.html");
@@ -49,7 +50,7 @@ type Board = { path: string };
 const MESSAGES = {
   ja: {
     usage:
-      "usage: reportboard [--lang ja|en] [--target <名前>] <file.md>\n       reportboard [--lang ja|en] wait --target <名前> [--timeout <秒>]\n       reportboard [--lang ja|en] reply --thread <id> (<本文> | --file <path>)\n       reportboard [--lang ja|en] --close <名前>\n       reportboard [--lang ja|en] --list",
+      "usage: reportboard [--lang ja|en] [--target <名前>] <file.md>\n       reportboard [--lang ja|en] wait --target <名前> [--timeout <秒>]\n       reportboard [--lang ja|en] reply --thread <id> [--done] (<本文> | --file <path>)\n       reportboard [--lang ja|en] --close <名前>\n       reportboard [--lang ja|en] --list",
     badLang: (source: string, value: string) => `${source} は ja か en で指定してください: ${value}`,
     badTargetName: "--target の名前は英数字と . _ - だけで指定してください",
     oneFile: "開く Markdown ファイルを 1 つだけ指定してください",
@@ -71,7 +72,7 @@ const MESSAGES = {
     emptyReply: "返事の本文が空です",
   },
   en: {
-    usage: "usage: reportboard [--lang ja|en] [--target <name>] <file.md>\n       reportboard [--lang ja|en] wait --target <name> [--timeout <seconds>]\n       reportboard [--lang ja|en] reply --thread <id> (<text> | --file <path>)\n       reportboard [--lang ja|en] --close <name>\n       reportboard [--lang ja|en] --list",
+    usage: "usage: reportboard [--lang ja|en] [--target <name>] <file.md>\n       reportboard [--lang ja|en] wait --target <name> [--timeout <seconds>]\n       reportboard [--lang ja|en] reply --thread <id> [--done] (<text> | --file <path>)\n       reportboard [--lang ja|en] --close <name>\n       reportboard [--lang ja|en] --list",
     badLang: (source: string, value: string) => `${source} must be ja or en: ${value}`,
     badTargetName: "--target names may use only letters, digits and . _ -",
     oneFile: "Give exactly one Markdown file to open",
@@ -113,7 +114,7 @@ async function main(argv: string[]) {
     return;
   }
 
-  if (argv[0] === "wait") process.exit(await outbox.wait({ args: argv.slice(1), messages: i18n.M, usageError, isTargetName: isValidTargetName }));
+  if (argv[0] === "wait") process.exit(await outbox.wait({ args: argv.slice(1), messages: i18n.M, usageError, isTargetName: isValidTargetName, onTaken: noteReceived }));
   if (argv[0] === "reply") process.exit(reply(argv.slice(1)));
 
   host.sweepStaleFiles();
@@ -146,9 +147,11 @@ function checkedTextFile(arg: string): string {
 function reply(args: string[]): number {
   let threadId: string | null = null;
   let filePath: string | null = null;
+  let done = false;
   const words: string[] = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--thread") threadId = args[++i] ?? null;
+    else if (args[i] === "--done") done = true;
     else if (args[i] === "--file") filePath = args[++i] ?? null;
     else words.push(args[i]);
   }
@@ -156,10 +159,21 @@ function reply(args: string[]): number {
   if (filePath !== null && !existsSync(resolve(filePath))) fatal(i18n.M.notFound(resolve(filePath)));
   const text = (filePath === null ? words.join(" ") : readFileSync(resolve(filePath), "utf8")).trim();
   if (text === "") fatal(i18n.M.emptyReply);
-  const result = addReply({ home: HOME, threadId, text });
+  const result = addReply({ home: HOME, threadId, text, done });
   if (result === null) fatal(i18n.M.threadNotFound(threadId));
-  console.log(`replied thread=${threadId} file=${result.file}`);
+  console.log(`replied thread=${threadId}${done ? " done" : ""} file=${result.file}`);
   return 0;
+}
+
+// Mark the message as received, so the window shows that the AI got it (docs/design.md "受け取った合図と、返事を分けて出す").
+// The instruction has already left the outbox, so a failure here only loses the sign, never the instruction
+function noteReceived(instruction: string): void {
+  try {
+    const { thread, sentAt } = JSON.parse(instruction) as { thread?: { id?: string }; sentAt?: string };
+    if (typeof thread?.id === "string" && typeof sentAt === "string") markReceived({ home: HOME, threadId: thread.id, sentAt });
+  } catch (error) {
+    console.error(`could not mark the message as received: ${(error as Error).message}`);
+  }
 }
 
 // ---------------- Showing the window ----------------
@@ -221,6 +235,8 @@ function runWindow(config: WindowConfig) {
   let currentPath: string | null = null;
   let lastStamp: DiskStamp = null;
   let lastThreadsStamp: DiskStamp = null;
+  // A new `wait` ends "working" on the threads (lib/threads.ts threadState), so the threads are re-sent when it changes
+  let lastWaitStarted: number | null = null;
   let sections: ReturnType<typeof renderReport>["sections"] = [];
   if (config.target !== null) outbox.prepare(config.target);
   const canTalk = config.target !== null;
@@ -228,7 +244,8 @@ function runWindow(config: WindowConfig) {
   const threadsNow = () => {
     if (currentPath === null) return [];
     lastThreadsStamp = stampOf(threadsPath(HOME, currentPath));
-    return placeThreads(readThreads(HOME, currentPath).threads, sections);
+    lastWaitStarted = config.target === null ? null : outbox.lastWaitStarted(config.target);
+    return placeThreads(readThreads(HOME, currentPath).threads, sections).map((thread) => ({ ...thread, state: threadState(thread, lastWaitStarted) }));
   };
   const renderNow = (path: string) => {
     const report = renderFile(path);
@@ -274,7 +291,10 @@ function runWindow(config: WindowConfig) {
       if (stamp !== null && !sameStamp(stamp, lastStamp)) {
         lastStamp = stamp;
         report = renderNow(currentPath);
-      } else if (!sameStamp(stampOf(threadsPath(HOME, currentPath)), lastThreadsStamp)) {
+      } else if (
+        !sameStamp(stampOf(threadsPath(HOME, currentPath)), lastThreadsStamp) ||
+        (config.target !== null && outbox.lastWaitStarted(config.target) !== lastWaitStarted)
+      ) {
         threads = threadsNow();
       }
     }

@@ -12,10 +12,12 @@ Open it with the `reportboard` command (a WKWebView window via bun + webview-bun
 1. Write the report as a Markdown file (where the project keeps such records, or under `/tmp/<project>/`)
 2. Open it with `reportboard --target <name> <file.md>`
 3. Run `reportboard wait --target <name>` **in the background**
-4. When the user sends something from a section, wait prints JSON and exits with rc=0
-5. If the message asks for a change (rewrite, add, remove, reorder, recalculate …), edit the Markdown file — the window reloads it by itself. If it is a question, answer it. Editing is a main use, not something to do only when a question happens to need it
-6. Either way, reply in the thread with `reportboard reply --thread <thread.id> --file <reply.md>` (or the text as an argument). When you edited, say what you changed (which section, what is different now)
-7. Go back to 3
+4. When the user sends something from a section, wait prints JSON and exits with rc=0. From that moment the window shows the user that you are working on it, until you reply with `--done` (or start the next `wait`)
+5. **Reply right away**, before reading files or editing, with one short line saying what you are going to do (`reportboard reply --thread <thread.id> "Adding a total row to the table"`)
+6. If the message asks for a change (rewrite, add, remove, reorder, recalculate …), edit the Markdown file — the window reloads it by itself. If it is a question, answer it. Editing is a main use, not something to do only when a question happens to need it
+7. While you work, reply again at each step that takes a while ("Checking the numbers against the spreadsheet", "Rewriting section B"). A reply cannot stream; each `reply` shows up as one message, so send several small ones rather than one at the end. When nothing changes in the window for long, the user gets uneasy
+8. Finish with the result and `--done`: `reportboard reply --thread <thread.id> --done --file <reply.md>` (or the text as an argument). When you edited, say what you changed (which section, what is different now). Without `--done` the window keeps saying you are still working until your next `wait`
+9. Go back to 3
 
 When you are not waiting, the window tells the user to say "reportboard を見て" / "check reportboard" in the conversation. When they do, run `reportboard wait --target <name>`: messages sent while nobody waited are returned at once
 
