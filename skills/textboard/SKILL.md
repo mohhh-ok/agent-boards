@@ -11,10 +11,10 @@ Open it with the `textboard` command (a WKWebView window via bun + webview-bun).
 
 1. Write the file (or pick an existing one)
 2. Open it with `textboard --target <name> <file>`
-3. Run `textboard wait --target <name>` **in the background**
-4. When the user edits the text, adds comments and sends an instruction in the window, wait prints JSON and exits with rc=0
+3. Start receiving right away (see "Receiving instructions"): in Claude Code, `textboard watch --target <name>` with the Monitor tool; elsewhere, `textboard wait --target <name>` in the background
+4. When the user edits the text, adds comments and sends an instruction in the window, you get it as JSON (with watch, one line per instruction as a notification)
 5. Read `file` from the JSON again (the user's edits are saved), then rewrite the file following `instruction` and `comments`. The window reloads it automatically
-6. After rewriting, go back to 3 (run wait again). Briefly report what you changed in the conversation too
+6. Briefly report what you changed in the conversation too. With wait, go back to 3 and run it again; watch keeps running
 
 ## Opening
 
@@ -35,15 +35,27 @@ Only when the exit code is 0 and `opened target=<name> pid=<PID> new|replaced fi
 - `2` = the window could not be confirmed within 20 seconds (for a new window, the log path is printed)
 - `3` = the window has unsaved edits, so it was not switched. Ask the user to "save or discard your edits", then open again. Do not `--close` and reopen on your own (the edits would be lost)
 
-## Receiving instructions (wait)
+## Receiving instructions (watch / wait)
+
+In Claude Code, run `watch` with the **Monitor** tool:
+
+```sh
+textboard watch --target <name>
+```
+
+- It keeps running and prints each instruction as one line of JSON (the shape below, on one line), so each one arrives as a notification while you keep talking with the user. Instructions queued before it started come first
+- Monitor stops it after its time limit (30 minutes at most) and tells you so. Start it again right away. Stop it when the user is done with the window
+- Exit codes are those below. It ends with `3` when the window is closed; then do not start it again
+
+Without Monitor (Codex and others), use `wait` in the background:
 
 ```sh
 textboard wait --target <name>; echo "rc=$?"
 ```
 
-- **Always run it in the background** (it does not finish until the user sends). Read the output when it finishes
-- Instructions sent while wait is not running are kept, and the next wait takes them one at a time, oldest first. After receiving one, run wait again, also to check whether more are queued
-- The window shows "The AI is waiting for an instruction" only while wait is running. Otherwise the user sees "The AI is not listening right now". Run wait as soon as you open the file
+- **Always run it in the background** (it does not finish until the user sends). Read the output when it finishes, then run it again at once
+- Instructions sent while nothing is receiving are kept. The next `wait` hands over all of them at once: one as a JSON object, several as a JSON array, oldest first. Handle every one
+- The window shows "The AI is waiting for an instruction" only while watch or wait is running. Otherwise the user sees "The AI is not listening right now". Start receiving as soon as you open the file
 
 Exit codes:
 
@@ -105,7 +117,7 @@ textboard --list           # open named windows
 - **Do not close everything with `pkill -f textboard` or the like.** It closes other projects' windows too
 - Do not use another project's name for `--target`
 - **Do not open textboard.html with `open "file://...?query"`** (the query is dropped and the window is empty). Do not open it with the Playwright MCP either
-- Do not run wait in the foreground (the conversation stops until the user sends)
+- Do not run watch or wait in the foreground (the conversation stops until the user sends)
 
 ## Notes
 

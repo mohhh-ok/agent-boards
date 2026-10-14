@@ -3,9 +3,9 @@
 // repository gets no extra files. They survive replacing the window and reloading the file.
 //
 // A thread remembers the heading it was started on (level, text, and which occurrence of that text), and the ledger row
-// when it was started on one. On every render it is attached to the place that still matches; a thread whose place is
-// gone is shown at the end of the report
-// (docs/design.md "セクションごとに AI とやり取りする").
+// when it was started on one. On every render it is attached to the place that still matches, following renamed headings
+// and moved rows (placeThreads); no thread is ever left out of the window
+// (docs/design.md "レポートを書き換えても会話を見失わせない").
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -119,18 +119,101 @@ function changeThread(home: string, threadId: string, change: (thread: Thread) =
   return null;
 }
 
-// Pairs each thread with the section it belongs to now. sectionId is null when its heading is gone
-export function placeThreads(threads: Thread[], sections: Section[]): Array<Thread & { sectionId: string | null }> {
+// How a thread was placed on the report as it is now:
+// "exact" = its heading (and row) as saved; "renamed" = the same place under a changed name (the numbers in the
+// heading changed, or the row moved under another heading), so the thread follows it; "moved" = its row is gone but
+// its heading is there, so it is shown under the heading with where it came from; null = its heading is gone too
+// (sectionId null)
+export type Placement = "exact" | "renamed" | "moved" | null;
+export type PlacedThread = Thread & { sectionId: string | null; placement: Placement; place: SectionRef | null };
+
+// Names compared with their numbers left out: a report's headings and rows carry totals that change with each edit
+// ("Phase 4 — 51 人日" → "Phase 4 — 49 人日")
+function withoutNumbers(text: string): string {
+  return text.replace(/[0-9０-９]+(?:[.,．][0-9０-９]+)*/g, "#").replace(/\s+/g, " ").trim();
+}
+
+// The occurrence-th of the candidates, or the only one: a heading or row of the same name that is still there at another
+// position is a different one, so a renamed candidate (with other numbers) is taken alone only when it is the only one
+function pick<T>(candidates: T[], occurrence: number, alone: boolean): T | null {
+  if (alone && candidates.length === 1) return candidates[0];
+  return candidates[occurrence] ?? null;
+}
+
+function only<T>(candidates: T[]): T | null {
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+// Pairs each thread with the section it belongs to now. A conversation is never dropped: a thread whose place cannot be
+// found has sectionId null and the window shows it apart (docs/design.md "セクションごとに AI とやり取りする").
+// place: the section it sits on now, without the id (what to save when it was renamed)
+export function placeThreads(threads: Thread[], sections: Section[]): PlacedThread[] {
+  const headings = sections.filter((s) => s.row === undefined);
+  const rows = sections.filter((s) => s.row !== undefined);
+  const refOf = (s: Section): SectionRef => {
+    const { id: _, ...ref } = s;
+    return ref;
+  };
+  const placed = (thread: Thread, section: Section | null, placement: Placement): PlacedThread => ({
+    ...thread,
+    sectionId: section?.id ?? null,
+    placement: section === null ? null : placement,
+    place: section === null ? null : refOf(section),
+  });
+
   return threads.map((thread) => {
-    const section = sections.find(
+    const saved = thread.heading;
+    const exact = sections.find(
       (s) =>
-        s.level === thread.heading.level &&
-        s.text === thread.heading.text &&
-        s.occurrence === thread.heading.occurrence &&
-        s.row?.name === thread.heading.row?.name &&
-        s.row?.occurrence === thread.heading.row?.occurrence,
+        s.level === saved.level &&
+        s.text === saved.text &&
+        s.occurrence === saved.occurrence &&
+        s.row?.name === saved.row?.name &&
+        s.row?.occurrence === saved.row?.occurrence,
     );
-    return { ...thread, sectionId: section?.id ?? null };
+    if (exact !== undefined) return placed(thread, exact, "exact");
+
+    const sameHeading = (s: Section) => s.level === saved.level && s.text === saved.text && s.occurrence === saved.occurrence;
+    const heading =
+      headings.find(sameHeading) ??
+      pick(
+        headings.filter((s) => s.level === saved.level && s.text !== saved.text && withoutNumbers(s.text) === withoutNumbers(saved.text)),
+        saved.occurrence,
+        true,
+      );
+    if (saved.row === undefined) return placed(thread, heading, "renamed");
+
+    const name = saved.row.name;
+    const occurrence = saved.row.occurrence;
+    const under = heading === null ? [] : rows.filter((s) => s.level === heading.level && s.text === heading.text && s.occurrence === heading.occurrence);
+    const renamedRow = (s: Section) => s.row !== undefined && s.row.name !== name && withoutNumbers(s.row.name) === withoutNumbers(name);
+    const row =
+      pick(under.filter((s) => s.row?.name === name), occurrence, false) ??
+      pick(under.filter(renamedRow), occurrence, true) ??
+      // The row moved under another heading (an item moved from one phase to another)
+      // (taken only when there is one row of that name in the report)
+      (under.every((s) => s.row?.name !== name) ? only(rows.filter((s) => s.row?.name === name)) : null) ??
+      only(rows.filter(renamedRow));
+    if (row !== null) return placed(thread, row, "renamed");
+    return placed(thread, heading, "moved");
+  });
+}
+
+// Save the place of the threads that were found under a changed name, so they keep following it through the next edits
+// and `wait` reports the heading as it is now. Threads changed meanwhile by someone else keep what they have
+export function rememberPlaces(params: { home: string; reportPath: string; places: Array<{ id: string; from: SectionRef; to: SectionRef }> }): void {
+  if (params.places.length === 0) return;
+  const path = threadsPath(params.home, params.reportPath);
+  withThreadsLock(path, () => {
+    const data = readThreads(params.home, params.reportPath);
+    let changed = false;
+    for (const { id, from, to } of params.places) {
+      const thread = data.threads.find((t) => t.id === id);
+      if (thread === undefined || JSON.stringify(thread.heading) !== JSON.stringify(from)) continue;
+      thread.heading = to;
+      changed = true;
+    }
+    if (changed) writeThreads(params.home, params.reportPath, data);
   });
 }
 

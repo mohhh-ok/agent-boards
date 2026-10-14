@@ -5,6 +5,8 @@
 // Usage:
 //   textboard --target <name> <file>                  Open. If a window with that name exists, switch it to the file
 //   textboard wait --target <name> [--timeout <sec>]  Wait until the window sends an instruction to the AI; print it as JSON on stdout
+//                                                    (a JSON array when several were queued)
+//   textboard watch --target <name> [--timeout <sec>] Keep receiving: print each instruction as one line of JSON (for Claude Code's Monitor)
 //   textboard --close <name>                          Close only the window with that name
 //   textboard --list                                  List the open named windows
 // Every form may start with --lang ja|en (display language; see "Language" in docs/textboard.md)
@@ -54,7 +56,7 @@ type Board = { path: string };
 const MESSAGES = {
   ja: {
     usage:
-      "usage: textboard [--lang ja|en] --target <名前> <ファイル>\n       textboard [--lang ja|en] wait --target <名前> [--timeout <秒>]\n       textboard [--lang ja|en] --close <名前>\n       textboard [--lang ja|en] --list",
+      "usage: textboard [--lang ja|en] --target <名前> <ファイル>\n       textboard [--lang ja|en] wait --target <名前> [--timeout <秒>]\n       textboard [--lang ja|en] watch --target <名前> [--timeout <秒>]\n       textboard [--lang ja|en] --close <名前>\n       textboard [--lang ja|en] --list",
     badLang: (source: string, value: string) => `${source} は ja か en で指定してください: ${value}`,
     badTargetName: "--target の名前は英数字と . _ - だけで指定してください",
     oneFile: "開くファイルを 1 つだけ指定してください",
@@ -74,7 +76,7 @@ const MESSAGES = {
   },
   en: {
     usage:
-      "usage: textboard [--lang ja|en] --target <name> <file>\n       textboard [--lang ja|en] wait --target <name> [--timeout <seconds>]\n       textboard [--lang ja|en] --close <name>\n       textboard [--lang ja|en] --list",
+      "usage: textboard [--lang ja|en] --target <name> <file>\n       textboard [--lang ja|en] wait --target <name> [--timeout <seconds>]\n       textboard [--lang ja|en] watch --target <name> [--timeout <seconds>]\n       textboard [--lang ja|en] --close <name>\n       textboard [--lang ja|en] --list",
     badLang: (source: string, value: string) => `${source} must be ja or en: ${value}`,
     badTargetName: "--target names may use only letters, digits and . _ -",
     oneFile: "Give exactly one file to open",
@@ -114,6 +116,7 @@ async function main(argv: string[]) {
     return;
   }
   if (argv[0] === "wait") process.exit(await outbox.wait({ args: argv.slice(1), messages: i18n.M, usageError, isTargetName: isValidTargetName }));
+  if (argv[0] === "watch") process.exit(await outbox.watch({ args: argv.slice(1), messages: i18n.M, usageError, isTargetName: isValidTargetName }));
 
   host.sweepStaleFiles();
   if (argv[0] !== "--target") usageError(i18n.M.badTargetName);

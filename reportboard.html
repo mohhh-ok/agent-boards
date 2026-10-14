@@ -277,7 +277,8 @@
   .thread-messages { list-style: none; margin: 0; padding: 10px 14px 6px; max-height: 20em; overflow-y: auto; display: flex; flex-direction: column; }
   .thread-messages:empty { display: none; }
   /* A chat: what the user sent on the right, the AI's replies on the left. The side says who it is, so only the AI's name is shown */
-  .thread-messages > .message-item { margin: 0; max-width: min(85%, 46em); display: flex; flex-direction: column; }
+  /* position: the hidden "You" label is placed inside its message, not against the page (it would stretch the page) */
+  .thread-messages > .message-item { margin: 0; max-width: min(85%, 46em); display: flex; flex-direction: column; position: relative; }
   .message-item.from-user { align-self: flex-end; align-items: flex-end; }
   .message-item.from-ai { align-self: flex-start; align-items: flex-start; }
   .thread-messages > .message-item + .message-item { margin-top: 12px; }
@@ -297,6 +298,9 @@
   .message-item.is-continued .message-text { border-top-left-radius: 8px; }
   /* Shown from the moment the AI takes the message until it says it is done (or waits again) */
   .message-item.is-pending .message-text { color: var(--sub); border-style: dashed; }
+  /* Under each message the AI has not answered yet: whether the AI has taken it */
+  .message-note { font-size: 12px; line-height: 1.5; color: var(--sub); margin: 3px 4px 0; }
+  .message-note.is-unread { color: var(--warn); }
   .message-item.is-pending.is-continued .message-head { display: none; }
   .pending-dots::after { content: "…"; display: inline-block; animation: pending-dots 1.2s steps(4, end) infinite; overflow: hidden; vertical-align: bottom; width: 1em; }
   @keyframes pending-dots { from { width: 0; } to { width: 1em; } }
@@ -326,6 +330,9 @@
   }
   .composer-status.is-error { color: var(--warn); }
   .orphans h2 { display: block; }
+  .orphans .orphans-hint { color: var(--sub); font-size: 14px; }
+  .topbar .lost-jump { white-space: nowrap; color: var(--warn); }
+  .topbar .lost-jump[hidden] { display: none; }
 
   /* ---- states ---- */
   .message { max-width: 40em; margin: 64px auto; color: var(--sub); text-align: center; }
@@ -336,6 +343,7 @@
 <header class="topbar">
   <span class="file" id="file"></span>
   <span class="dir" id="dir"></span>
+  <button type="button" class="text-button lost-jump" id="lost-jump" hidden></button>
   <button type="button" class="text-button changes-jump" id="changes-jump" hidden></button>
   <span class="status" id="status"></span>
 </header>
@@ -376,12 +384,18 @@ const STRINGS = {
     waiting: "AI が受け取り待ちです。送るとすぐ届きます",
     notWaiting: "AI は今、受け取り待ちではありません。送った内容は保存されます。AI との会話で「reportboard を見て」と伝えると届きます",
     awaitingReply: "送りました。AI の返事はここに出ます",
+    sentNotWaiting: "送りました（保存済み）。AI は今、受け取り待ちではありません。AI との会話で「reportboard を見て」と伝えると届きます",
+    notTaken: "AI はまだ受け取っていません",
+    taken: (time) => `AI が受け取りました ${time}`,
     received: "受け取りました。返事を書いています",
     stillWorking: "作業を続けています",
     working: "AI が作業中です。続けて書いた内容も保存され、AI に届きます",
     sendFailed: (e) => `送れませんでした: ${e}`,
     orphans: "見出しが見つからないやり取り",
-    orphanOrigin: (h) => `元の見出し: ${h}`,
+    orphansHint: "レポートが書き換わって、やり取りを始めた見出しが無くなりました。ここで続けられます",
+    lostJump: (n) => `見出しが見つからないやり取り ${n} 件 — 見る`,
+    orphanOrigin: (h) => `元の場所: ${h}`,
+    rowGone: (h) => `元の場所: ${h}（この項目は今のレポートにありません）`,
   },
   en: {
     loading: "Loading…",
@@ -409,12 +423,18 @@ const STRINGS = {
     waiting: "The AI is waiting. What you send reaches it right away",
     notWaiting: "The AI is not waiting right now. What you send is kept; tell the AI \"check reportboard\" in your conversation to deliver it",
     awaitingReply: "Sent. The AI's reply will appear here",
+    sentNotWaiting: "Sent (saved). The AI is not waiting right now; tell the AI \"check reportboard\" in your conversation to deliver it",
+    notTaken: "The AI has not taken this yet",
+    taken: (time) => `The AI took this at ${time}`,
     received: "Got it. Writing a reply",
     stillWorking: "Still working on it",
     working: "The AI is working on it. What you add is kept and reaches the AI",
     sendFailed: (e) => `Could not send: ${e}`,
     orphans: "Conversations whose heading is gone",
-    orphanOrigin: (h) => `Original heading: ${h}`,
+    orphansHint: "The report changed and the heading these were started on is gone. You can carry on here",
+    lostJump: (n) => `${n} conversation${n === 1 ? "" : "s"} whose heading is gone — show`,
+    orphanOrigin: (h) => `Started on: ${h}`,
+    rowGone: (h) => `Started on: ${h} (this item is no longer in the report)`,
   },
 };
 const params = new URLSearchParams(location.search);
@@ -449,6 +469,7 @@ function render(report, { keepOpen }) {
   document.getElementById("dir").textContent = report.dir;
   document.title = report.title ?? report.name;
   const focusedKey = document.activeElement?.closest?.(".thread")?.dataset.key ?? null;
+  const focusedThread = document.activeElement?.closest?.(".thread")?._threadId ?? null;
   $report.innerHTML = report.html;
 
   $tocList.replaceChildren(
@@ -506,7 +527,13 @@ function render(report, { keepOpen }) {
   canTalk = report.canTalk;
   buildThreadPanels();
   renderThreads(report.threads);
-  if (focusedKey !== null) document.querySelector(`.thread[data-key="${CSS.escape(focusedKey)}"] textarea`)?.focus();
+  if (focusedKey !== null) {
+    // The conversation being typed in keeps the focus, also when it moved to another box
+    const panel =
+      [...document.querySelectorAll(".thread")].find((p) => focusedThread !== null && p._threadId === focusedThread) ??
+      document.querySelector(`.thread[data-key="${CSS.escape(focusedKey)}"]`);
+    panel?.querySelector("textarea")?.focus();
+  }
   measureRows();
   updateCurrentSection();
 }
@@ -584,7 +611,11 @@ function makePanel({ key, section, threadId, origin }) {
   box.rows = 1;
   box.placeholder = section.row ? T.rowPlaceholder : T.placeholder;
   box.value = drafts.get(key) ?? "";
-  box.addEventListener("input", () => drafts.set(key, box.value));
+  // Kept under the thread too, so a draft follows a conversation that moves to another box when the report changes
+  box.addEventListener("input", () => {
+    drafts.set(key, box.value);
+    if (panel._threadId) drafts.set(`thread:${panel._threadId}`, box.value);
+  });
   // Enter sends, Shift+Enter starts a new line. The Enter that confirms IME input does not send (enterKey.js)
   window.EnterKey.onPlainEnter(box, () => composer.requestSubmit());
   const send = document.createElement("button");
@@ -617,8 +648,10 @@ async function sendFrom(panel) {
   try {
     const result = await window.__reportboardSend({ threadId: panel._threadId, section: panel._section, text });
     if (!result.ok) throw new Error(result.error);
+    panel._threadId = result.threadId;
     box.value = "";
     drafts.delete(panel.dataset.key);
+    drafts.delete(`thread:${panel._threadId}`);
     status.textContent = "";
     renderThreads(result.threads);
   } catch (error) {
@@ -629,21 +662,58 @@ async function sendFrom(panel) {
   }
 }
 
+// Where a thread came from, for the boxes shown away from their own section
+function originOf(thread) {
+  const place = thread.heading.row ? `${thread.heading.text} › ${thread.heading.row.name}` : thread.heading.text;
+  return thread.placement === "moved" ? T.rowGone(place) : T.orphanOrigin(place);
+}
+
+// A box for one thread shown apart from a section's own box: it keeps the key of the thread wherever it is shown,
+// so what the user is typing and whether it is open follow the thread
+function threadPanel(thread) {
+  const key = `thread:${thread.id}`;
+  let panel = document.querySelector(`.thread[data-key="${CSS.escape(key)}"]`);
+  if (!panel) {
+    openPanels.add(key);
+    panel = makePanel({ key, section: thread.heading, threadId: thread.id, origin: originOf(thread) });
+  }
+  panel.querySelector(".thread-origin").textContent = originOf(thread);
+  return panel;
+}
+
+// No conversation is ever left out of the window (docs/design.md "セクションごとに AI とやり取りする"):
+// - a section's own box shows the first thread placed on it
+// - other threads placed on it (a row that is gone, shown under its heading; a second conversation on the same
+//   section) get boxes of their own right after it, saying where they started
+// - threads whose heading is gone too go to a box near the top of the report, and the top bar says how many there are
 function renderThreads(next) {
   threads = next ?? [];
   if (!canTalk) return;
-  const placed = new Map();
-  const orphans = [];
+  const own = new Map();
+  const extra = new Map();
+  const lost = [];
   for (const thread of threads) {
-    if (thread.sectionId === null) orphans.push(thread);
-    else placed.set(thread.sectionId, thread);
+    if (thread.sectionId === null) lost.push(thread);
+    else if (thread.placement !== "moved" && !own.has(thread.sectionId)) own.set(thread.sectionId, thread);
+    else extra.set(thread.sectionId, [...(extra.get(thread.sectionId) ?? []), thread]);
   }
+  const shown = new Set();
   for (const section of sections) {
     const panel = document.querySelector(`.thread[data-key="${CSS.escape(panelKey(section))}"]`);
-    if (panel) fillPanel(panel, placed.get(section.id) ?? null);
+    if (!panel) continue;
+    fillPanel(panel, own.get(section.id) ?? null);
+    let after = panel;
+    for (const thread of extra.get(section.id) ?? []) {
+      const box = threadPanel(thread);
+      after.after(box);
+      after = box;
+      shown.add(box);
+      fillPanel(box, thread);
+    }
   }
+
   let box = document.getElementById("orphans");
-  if (orphans.length === 0) {
+  if (lost.length === 0) {
     box?.remove();
   } else {
     if (!box) {
@@ -652,27 +722,37 @@ function renderThreads(next) {
       box.className = "orphans";
       const h = document.createElement("h2");
       h.textContent = T.orphans;
-      box.append(h);
-      $report.append(box);
+      const hint = document.createElement("p");
+      hint.className = "orphans-hint";
+      hint.textContent = T.orphansHint;
+      box.append(h, hint);
     }
-    for (const thread of orphans) {
-      const key = `thread:${thread.id}`;
-      let panel = box.querySelector(`.thread[data-key="${CSS.escape(key)}"]`);
-      if (!panel) {
-        openPanels.add(key);
-        const origin = thread.heading.row ? `${thread.heading.text} › ${thread.heading.row.name}` : thread.heading.text;
-        panel = makePanel({ key, section: thread.heading, threadId: thread.id, origin });
-        box.append(panel);
-      }
+    // Near the top, under the title, where it is seen without scrolling through the report
+    const title = $report.querySelector(":scope > h1.report-title");
+    if (box.parentElement !== $report) {
+      if (title) title.after(box);
+      else $report.prepend(box);
+    }
+    for (const thread of lost) {
+      const panel = threadPanel(thread);
+      box.append(panel);
+      shown.add(panel);
       fillPanel(panel, thread);
     }
   }
+  // Boxes of threads that are now in their section's own box again
+  for (const panel of document.querySelectorAll('.thread[data-key^="thread:"]')) if (!shown.has(panel)) panel.remove();
+  $lostJump.hidden = lost.length === 0;
+  if (lost.length > 0) $lostJump.textContent = T.lostJump(lost.length);
   updateWaiting();
 }
 
 function fillPanel(panel, thread) {
   const key = panel.dataset.key;
-  panel._threadId = thread?.id ?? panel._threadId ?? null;
+  // A section's own box without a thread starts a new one: the thread it showed before may have moved to another box
+  panel._threadId = thread?.id ?? (key.startsWith("thread:") ? panel._threadId : null);
+  const textarea = panel.querySelector("textarea");
+  if (textarea.value === "" && panel._threadId && drafts.has(`thread:${panel._threadId}`)) textarea.value = drafts.get(`thread:${panel._threadId}`);
   const messages = thread?.messages ?? [];
   panel._state = thread?.state ?? null;
   if (messages.length > 0 && !seenPanels.has(key)) {
@@ -689,7 +769,14 @@ function fillPanel(panel, thread) {
   const composer = panel.querySelector(".composer");
   const before = panel.hidden ? null : composer.getBoundingClientRect();
   const wasInView = before !== null && before.height > 0 && before.top < window.innerHeight && before.bottom > 0;
-  const items = messages.map((m, i) => ({ ...m, continued: m.from === "ai" && messages[i - 1]?.from === "ai" }));
+  // Each message the AI has not answered yet says whether the AI has taken it, so messages sent one after another
+  // each show what became of them
+  const lastAi = messages.findLastIndex((m) => m.from === "ai");
+  const items = messages.map((m, i) => ({
+    ...m,
+    continued: m.from === "ai" && messages[i - 1]?.from === "ai",
+    note: m.from !== "user" || i < lastAi ? null : m.receivedAt ? { text: T.taken(timeOf(Date.parse(m.receivedAt))), unread: false } : { text: T.notTaken, unread: true },
+  }));
   // Under the latest reply while the AI is still at it; it joins the AI's replies right above it
   if (panel._state === "received" || panel._state === "working") {
     const last = messages[messages.length - 1];
@@ -718,6 +805,12 @@ function fillPanel(panel, thread) {
         text.append(dots);
       }
       li.append(head, text);
+      if (m.note) {
+        const note = document.createElement("div");
+        note.className = `message-note${m.note.unread ? " is-unread" : ""}`;
+        note.textContent = m.note.text;
+        li.append(note);
+      }
       return li;
     }),
   );
@@ -734,7 +827,7 @@ function updateWaiting() {
   for (const panel of document.querySelectorAll(".thread")) {
     const status = panel.querySelector(".composer-status");
     if (status.classList.contains("is-error") || status.textContent === T.sending) continue;
-    status.textContent = panel._state === "sent" ? T.awaitingReply : panel._state === "received" || panel._state === "working" ? T.working : aiWaiting ? T.waiting : T.notWaiting;
+    status.textContent = panel._state === "sent" ? (aiWaiting ? T.awaitingReply : T.sentNotWaiting) : panel._state === "received" || panel._state === "working" ? T.working : aiWaiting ? T.waiting : T.notWaiting;
   }
 }
 
@@ -840,6 +933,8 @@ const BLOCKS = ":scope > p, :scope > blockquote, :scope > pre, tr, li, h1, h2, h
 const changed = [];
 let changeIndex = 0;
 const $jump = document.getElementById("changes-jump");
+const $lostJump = document.getElementById("lost-jump");
+$lostJump.addEventListener("click", () => document.getElementById("orphans")?.scrollIntoView({ block: "start" }));
 
 function blocksNow() {
   // A changed detail of a breakdown row marks the row: a closed row hides its details
@@ -888,6 +983,30 @@ $jump.addEventListener("click", () => {
   changeIndex += 1;
 });
 
+// The conversation the user is looking at. When the report changes, it stays where it was on the screen, even when it
+// moved to another place in the report (its row was renamed, moved under another heading, or removed)
+// The one being typed in, or else the one taking the most of the screen
+function threadInView() {
+  const focused = document.activeElement?.closest?.(".thread");
+  if (focused?._threadId) return { id: focused._threadId, top: focused.getBoundingClientRect().top };
+  let best = null;
+  for (const panel of document.querySelectorAll(".thread")) {
+    if (panel.hidden || !panel._threadId) continue;
+    const rect = panel.getBoundingClientRect();
+    const seen = Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0);
+    if (seen > 0 && (best === null || seen > best.seen)) best = { id: panel._threadId, top: rect.top, seen };
+  }
+  return best;
+}
+
+function keepInView(viewed) {
+  if (viewed === null) return;
+  const panel = [...document.querySelectorAll(".thread")].find((p) => p._threadId === viewed.id && !p.hidden);
+  if (!panel) return;
+  const shift = panel.getBoundingClientRect().top - viewed.top;
+  if (Math.abs(shift) > 1) window.scrollBy(0, shift);
+}
+
 async function poll() {
   try {
     const result = await window.__reportboardPoll();
@@ -899,13 +1018,18 @@ async function poll() {
       aiWaiting = result.waiting;
       updateWaiting();
     }
-    if (result.threads) renderThreads(result.threads);
+    const viewed = threadInView();
+    if (result.threads) {
+      renderThreads(result.threads);
+      keepInView(viewed);
+    }
     if (result.missing) setStatus(T.missing, "warn");
     else if (result.report) {
       const y = window.scrollY;
       const before = blockTexts();
       render(result.report, { keepOpen: openRowKeys() });
       window.scrollTo(0, y);
+      keepInView(viewed);
       markChanges(before);
       setStatus(T.reloaded(timeOf(Date.now())), "fresh");
       clearTimeout(statusTimer);

@@ -88,11 +88,14 @@ describe("reportboard page", () => {
     const pending = received.querySelectorAll(".message-item.is-pending");
     expect(pending.length).toBe(1);
     expect(pending[0].textContent).toContain("Got it. Writing a reply");
+    expect(received.querySelector(".message-note")!.textContent).toStartWith("The AI took this at");
     expect(received.querySelector(".composer-status")!.textContent).toBe("The AI is working on it. What you add is kept and reaches the AI");
 
     const sent = await panelOf({ messages: [{ ...user, receivedAt: undefined }], state: "sent" });
     expect(sent.querySelector(".is-pending")).toBeNull();
-    expect(sent.querySelector(".composer-status")!.textContent).toBe("Sent. The AI's reply will appear here");
+    // No wait is running in this page: the message is kept, and the box says how to deliver it
+    expect(sent.querySelector(".composer-status")!.textContent).toContain("Sent (saved). The AI is not waiting right now");
+    expect(sent.querySelector(".message-note.is-unread")!.textContent).toBe("The AI has not taken this yet");
 
     const working = await panelOf({ messages: [user, ai("On it", 1), ai("Checking the table", 2)], state: "working" });
     const workingItems = [...working.querySelectorAll(".message-item")];
@@ -105,8 +108,41 @@ describe("reportboard page", () => {
 
     const replied = await panelOf({ messages: [user, ai("On it", 1), ai("Checking the table", 2), ai("Done", 3)], state: null });
     expect(replied.querySelector(".is-pending")).toBeNull();
+    // Answered messages carry no note
+    expect(replied.querySelector(".message-note")).toBeNull();
     expect([...replied.querySelectorAll(".message-item")].map((li) => li.classList.contains("is-continued"))).toEqual([false, false, true, true]);
     expect(replied.querySelector(".composer-status")!.textContent).not.toContain("working");
+  });
+
+  test("no conversation is left out: a removed row's under its heading, a second one on a section, one whose heading is gone near the top", async () => {
+    const md = "# Estimate\n\nLead\n\n## Phase 4 — 49 days\n\n- D. Camera — 4.5 days\n- E. Selfie — 5.5 days\n\n## Notes\n\nText\n";
+    const message = (text: string) => ({ from: "user", text, at: "2026-10-14T07:27:27.000Z", receivedAt: "2026-10-14T07:27:28.000Z" });
+    const threads = [
+      { id: "t-own", heading: { level: 2, text: "Phase 4 — 49 days", occurrence: 0 }, sectionId: "section-1", placement: "exact", messages: [message("own")] },
+      { id: "t-row", heading: { level: 2, text: "Phase 4 — 51 days", occurrence: 0, row: { name: "M. Concierge", occurrence: 0 } }, sectionId: "section-1", placement: "moved", messages: [message("row gone")] },
+      { id: "t-second", heading: { level: 2, text: "Notes", occurrence: 0 }, sectionId: "section-4", placement: "exact", messages: [message("first on notes")] },
+      { id: "t-third", heading: { level: 2, text: "Notes", occurrence: 0 }, sectionId: "section-4", placement: "exact", messages: [message("second on notes")] },
+      { id: "t-lost", heading: { level: 2, text: "Risks", occurrence: 0 }, sectionId: null, placement: null, messages: [message("lost")] },
+    ];
+    const document = await openPage(md, threads);
+    const texts = [...document.querySelectorAll(".thread")].map((p) => [p.querySelector(".thread-origin")?.textContent ?? null, p.querySelector(".message-text")?.textContent ?? null]);
+    expect(texts).toEqual([
+      // Near the top, under the title
+      ["Started on: Risks", "lost"],
+      [null, "own"],
+      ["Started on: Phase 4 — 51 days › M. Concierge (this item is no longer in the report)", "row gone"],
+      // The rows' own boxes, empty
+      [null, null],
+      [null, null],
+      [null, "first on notes"],
+      ["Started on: Notes", "second on notes"],
+    ]);
+    const orphans = document.getElementById("orphans")!;
+    expect(orphans.previousElementSibling!.matches("h1.report-title")).toBe(true);
+    const jump = document.getElementById("lost-jump")!;
+    expect((jump as unknown as { hidden: boolean }).hidden).toBe(false);
+    expect(jump.textContent).toBe("1 conversation whose heading is gone — show");
+    for (const panel of document.querySelectorAll(".thread")) if (panel.querySelector(".message-text")) expect((panel as unknown as { hidden: boolean }).hidden).toBe(false);
   });
 
   test("a changed detail of a breakdown row marks the row, which shows even while the row is closed", async () => {

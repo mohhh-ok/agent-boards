@@ -50,11 +50,12 @@ Each row of a breakdown has its own "Edit with AI" too, under its details when t
 On the agent's side:
 
 ```sh
-reportboard wait --target <name> [--timeout <seconds>]
+reportboard watch --target <name> [--timeout <seconds>]   # keeps running; one line of JSON per message (Claude Code: run it with Monitor)
+reportboard wait --target <name> [--timeout <seconds>]    # once: what is queued, or the next message (for agents without a monitor)
 reportboard reply --thread <id> [--done] "answer"   # or: --file <path>. --done on the last reply
 ```
 
-`wait` prints what you sent as JSON and exits:
+`watch` prints every message as one line of JSON as it comes, starting with the ones already queued, and runs until the window is closed (rc 3). `wait` prints what you sent as JSON and exits; when several messages were queued it prints all of them as a JSON array, oldest first. One message:
 
 ```json
 {
@@ -75,13 +76,13 @@ reportboard reply --thread <id> [--done] "answer"   # or: --file <path>. --done 
 "section": { "level": 2, "heading": "内訳", "row": "A. カメラ本人認証 (identity-verification.md)" }
 ```
 
- Exit codes of `wait`: 0 = got one / 1 = the window is not open / 2 = `--timeout` passed / 3 = the window was closed. Messages sent while nobody waits are kept for the next `wait`, and the box tells you whether the AI is waiting.
+Exit codes of `wait`: 0 = got some / 1 = the window is not open / 2 = `--timeout` passed / 3 = the window was closed. `watch` uses the same codes, 3 when the window is closed. Messages sent while nobody receives are kept for the next `watch` or `wait`. Under each message the agent has not answered yet, the box says whether the agent has taken it ("The AI has not taken this yet" / "The AI took this at …"), and the line under the box says whether the AI is waiting. `reply` also prints `unread N` when messages from the same report are waiting to be taken.
 
 When `wait` hands a message to the agent, the conversation shows "Got it. Writing a reply", and after the agent's first reply "Still working on it" under the latest reply, until the agent sends its last reply with `reply --done` (or starts the next `wait`). The agent replies at once with what it is going to do, again at each step that takes a while, and last with the result; replies in a row read as one.
 
 The agent edits the report when the message asks for a change and answers when it asks a question; either way it replies in the thread, saying what it changed.
 
-Conversations are kept in `~/.reportboard/threads/` (one file per report, named by the hash of its path), not next to the report. They survive reloading and reopening. Each one stays with its heading by text; if that heading disappears, the conversation moves to "Conversations whose heading is gone" at the end. Moving or renaming the report detaches its conversations.
+Conversations are kept in `~/.reportboard/threads/` (one file per report, named by the hash of its path), not next to the report. They survive reloading and reopening. Each one stays with its heading and row when the agent rewrites the report: it follows a heading whose numbers changed ("— 51 days" → "— 49 days") and a row that moved under another heading. When its row is gone, it stays under its heading, saying where it started; when its heading is gone too, it moves to "Conversations whose heading is gone" under the title, and the top bar says how many there are. The conversation you are looking at stays where it is on the screen. Moving or renaming the report detaches its conversations.
 
 ## Language
 
@@ -89,4 +90,4 @@ Window and messages are in Japanese or English: `--lang ja|en` > `REPORTBOARD_LA
 
 ## Known limitations
 
-- If the same report is open in two named windows and you start a conversation on the same heading in both before either has seen the other's, two conversations are created for that heading and the window shows only one of them. The other is still saved in `~/.reportboard/threads/`
+- If the same report is open in two named windows and you start a conversation on the same heading in both before either has seen the other's, two conversations are created for that heading. Both are shown; the second one under the first, saying where it started

@@ -4,6 +4,8 @@
 // Usage:
 //   reportboard [--target <name>] <file.md>   Open. If a window with that name exists, switch it to the file
 //   reportboard wait --target <name> [--timeout <sec>]   Wait until the user sends something to the AI from a section; print it as JSON
+//                                                      (a JSON array when several were queued)
+//   reportboard watch --target <name> [--timeout <sec>]  Keep receiving: print each message as one line of JSON (for Claude Code's Monitor)
 //   reportboard reply --thread <id> [--done] (<text> | --file <path>)   Answer in that thread. It shows up in the section it was sent from.
 //                                                      --done on the last reply ends "the AI is working on it" in the window
 //   reportboard --close <name>                Close only the window with that name
@@ -29,7 +31,7 @@ import { applyLang, createI18n, type Lang } from "./lib/lang.ts";
 import { createWindowHost, isValidTargetName } from "./lib/windows.ts";
 import { renderReport } from "./lib/report.ts";
 import { OUTBOX_DIR_NAME, createOutbox } from "./lib/outbox.ts";
-import { addReply, addUserMessage, markReceived, placeThreads, readThreads, threadState, threadsPath, type SectionRef } from "./lib/threads.ts";
+import { addReply, addUserMessage, markReceived, placeThreads, readThreads, rememberPlaces, threadState, threadsPath, type SectionRef } from "./lib/threads.ts";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const htmlPath = resolve(dirname(scriptPath), "reportboard.html");
@@ -50,7 +52,7 @@ type Board = { path: string };
 const MESSAGES = {
   ja: {
     usage:
-      "usage: reportboard [--lang ja|en] [--target <名前>] <file.md>\n       reportboard [--lang ja|en] wait --target <名前> [--timeout <秒>]\n       reportboard [--lang ja|en] reply --thread <id> [--done] (<本文> | --file <path>)\n       reportboard [--lang ja|en] --close <名前>\n       reportboard [--lang ja|en] --list",
+      "usage: reportboard [--lang ja|en] [--target <名前>] <file.md>\n       reportboard [--lang ja|en] wait --target <名前> [--timeout <秒>]\n       reportboard [--lang ja|en] watch --target <名前> [--timeout <秒>]\n       reportboard [--lang ja|en] reply --thread <id> [--done] (<本文> | --file <path>)\n       reportboard [--lang ja|en] --close <名前>\n       reportboard [--lang ja|en] --list",
     badLang: (source: string, value: string) => `${source} は ja か en で指定してください: ${value}`,
     badTargetName: "--target の名前は英数字と . _ - だけで指定してください",
     oneFile: "開く Markdown ファイルを 1 つだけ指定してください",
@@ -70,9 +72,10 @@ const MESSAGES = {
     threadNotFound: (id: string) => `スレッドが見つかりません: ${id}`,
     loadFailed: (detail: string) => `窓は開きましたが、レポートを読み込めませんでした: ${detail}`,
     emptyReply: "返事の本文が空です",
+    unread: (target: string, n: number) => `未読 ${n} 件: 窓から送られてまだ受け取っていないメッセージがあります。reportboard wait --target ${target} で受け取ってください`,
   },
   en: {
-    usage: "usage: reportboard [--lang ja|en] [--target <name>] <file.md>\n       reportboard [--lang ja|en] wait --target <name> [--timeout <seconds>]\n       reportboard [--lang ja|en] reply --thread <id> [--done] (<text> | --file <path>)\n       reportboard [--lang ja|en] --close <name>\n       reportboard [--lang ja|en] --list",
+    usage: "usage: reportboard [--lang ja|en] [--target <name>] <file.md>\n       reportboard [--lang ja|en] wait --target <name> [--timeout <seconds>]\n       reportboard [--lang ja|en] watch --target <name> [--timeout <seconds>]\n       reportboard [--lang ja|en] reply --thread <id> [--done] (<text> | --file <path>)\n       reportboard [--lang ja|en] --close <name>\n       reportboard [--lang ja|en] --list",
     badLang: (source: string, value: string) => `${source} must be ja or en: ${value}`,
     badTargetName: "--target names may use only letters, digits and . _ -",
     oneFile: "Give exactly one Markdown file to open",
@@ -92,6 +95,7 @@ const MESSAGES = {
     threadNotFound: (id: string) => `Thread not found: ${id}`,
     loadFailed: (detail: string) => `The window opened but could not read the report: ${detail}`,
     emptyReply: "The reply is empty",
+    unread: (target: string, n: number) => `unread ${n}: messages from the window nobody has taken yet. Take them with reportboard wait --target ${target}`,
   },
 } satisfies Record<Lang, unknown>;
 
@@ -115,6 +119,7 @@ async function main(argv: string[]) {
   }
 
   if (argv[0] === "wait") process.exit(await outbox.wait({ args: argv.slice(1), messages: i18n.M, usageError, isTargetName: isValidTargetName, onTaken: noteReceived }));
+  if (argv[0] === "watch") process.exit(await outbox.watch({ args: argv.slice(1), messages: i18n.M, usageError, isTargetName: isValidTargetName, onTaken: noteReceived }));
   if (argv[0] === "reply") process.exit(reply(argv.slice(1)));
 
   host.sweepStaleFiles();
@@ -162,6 +167,11 @@ function reply(args: string[]): number {
   const result = addReply({ home: HOME, threadId, text, done });
   if (result === null) fatal(i18n.M.threadNotFound(threadId));
   console.log(`replied thread=${threadId}${done ? " done" : ""} file=${result.file}`);
+  // Messages from the same report nobody has taken yet: an agent that answers without receiving again would miss them
+  for (const target of outbox.targets()) {
+    const unread = outbox.pending(target).filter((m) => m.file === result.file).length;
+    if (unread > 0) console.log(i18n.M.unread(target, unread));
+  }
   return 0;
 }
 
@@ -245,7 +255,17 @@ function runWindow(config: WindowConfig) {
     if (currentPath === null) return [];
     lastThreadsStamp = stampOf(threadsPath(HOME, currentPath));
     lastWaitStarted = config.target === null ? null : outbox.lastWaitStarted(config.target);
-    return placeThreads(readThreads(HOME, currentPath).threads, sections).map((thread) => ({ ...thread, state: threadState(thread, lastWaitStarted) }));
+    const placed = placeThreads(readThreads(HOME, currentPath).threads, sections);
+    const renamed = placed.filter((t) => t.placement === "renamed" && t.place !== null).map((t) => ({ id: t.id, from: t.heading, to: t.place as SectionRef }));
+    if (renamed.length > 0) {
+      // Saved so the thread keeps following its place; the next poll sends the threads again, already placed exactly
+      try {
+        rememberPlaces({ home: HOME, reportPath: currentPath, places: renamed });
+      } catch (error) {
+        console.error(`could not save where the threads moved: ${(error as Error).message}`);
+      }
+    }
+    return placed.map((thread) => ({ ...thread, state: threadState(thread, lastWaitStarted) }));
   };
   const renderNow = (path: string) => {
     const report = renderFile(path);

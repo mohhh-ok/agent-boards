@@ -101,7 +101,13 @@ Exit codes:
 ./textboard.ts wait --target <name> [--timeout <seconds>]
 ```
 
-`wait` blocks until the user sends an instruction from the window named `<name>`, prints it as JSON on stdout and exits with 0. Agents run it in the background and read the output when it finishes. Instructions sent while no `wait` is running are kept and handed to the next `wait`, oldest first.
+`wait` blocks until the user sends an instruction from the window named `<name>`, prints it as JSON on stdout and exits with 0. Agents run it in the background and read the output when it finishes. Instructions sent while no `wait` is running are kept, and the next `wait` hands over all of them at once: one as a JSON object, several as a JSON array, oldest first.
+
+```sh
+./textboard.ts watch --target <name> [--timeout <seconds>]
+```
+
+`watch` keeps running and prints each instruction as one line of JSON as it comes, starting with the ones already queued (for Claude Code's Monitor, which turns each line into a notification). It ends with 3 when the window is closed. While it runs, the window shows that the AI is waiting.
 
 ```json
 {
