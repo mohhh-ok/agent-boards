@@ -98,6 +98,9 @@
     min-width: 0;
     flex: 1;
   }
+  /* Comments that lost their place sit at the top of the margin; when the user is further down, this says so */
+  #lost-jump { white-space: nowrap; color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+  #lost-jump[hidden] { display: none; }
   #save-state { color: var(--fg-dim); white-space: nowrap; }
   #save-state.dirty { color: var(--accent); }
   #save-state.dirty::before { content: "● "; }
@@ -182,9 +185,10 @@
   #lost h2 {
     font-size: 12px;
     font-weight: 600;
-    color: var(--fg-dim);
-    margin: 0 0 8px;
+    color: var(--accent);
+    margin: 0 0 4px;
   }
+  #lost .lost-hint { font-size: 12px; color: var(--fg-dim); margin: 0 0 8px; line-height: 1.5; }
   #cards { position: relative; }
 
   .card {
@@ -331,6 +335,7 @@
 <header>
   <span id="file-name"></span>
   <span id="file-dir"></span>
+  <button id="lost-jump" class="link" hidden></button>
   <span id="save-state"></span>
   <button id="save-btn"><span data-i18n="save"></span><kbd>⌘S</kbd></button>
 </header>
@@ -399,6 +404,7 @@
       reattach: "選択範囲に付け直す",
       lostTitle: function (n) { return "場所が分からなくなったコメント（" + n + "）"; },
       lostHint: "本文が書き換わって、引用した文が見つからなくなりました",
+      lostJump: function (n) { return "場所が分からなくなったコメント " + n + " 件 — 見る"; },
       line: function (a, b) { return a === b ? a + " 行目" : a + "〜" + b + " 行目"; },
       editHint: "Enter 確定 / Shift+Enter 改行 / Esc やめる",
       agentWaiting: "AI が指示を待っています",
@@ -447,6 +453,7 @@
       reattach: "Attach to selection",
       lostTitle: function (n) { return "Comments that lost their place (" + n + ")"; },
       lostHint: "The text changed and the quoted passage can no longer be found",
+      lostJump: function (n) { return n + " comment" + (n === 1 ? "" : "s") + " lost their place — show"; },
       line: function (a, b) { return a === b ? "line " + a : "lines " + a + "–" + b; },
       editHint: "Enter to save / Shift+Enter for a new line / Esc to cancel",
       agentWaiting: "The AI is waiting for an instruction",
@@ -481,6 +488,8 @@
   var scroller = $("scroller");
   var cardsEl = $("cards");
   var lostEl = $("lost");
+  var lostJumpEl = $("lost-jump");
+  lostJumpEl.addEventListener("click", function () { lostEl.scrollIntoView({ block: "start" }); });
   var addBtn = $("add-comment");
   var bannersEl = $("banners");
   var instructionEl = $("instruction");
@@ -636,10 +645,17 @@
     if (lost.length > 0) {
       var h = document.createElement("h2");
       h.textContent = S.lostTitle(lost.length);
-      h.title = S.lostHint;
+      var hint = document.createElement("p");
+      hint.className = "lost-hint";
+      hint.textContent = S.lostHint;
       lostEl.appendChild(h);
+      lostEl.appendChild(hint);
       lost.forEach(function (c) { lostEl.appendChild(buildCard(c, true)); });
     }
+
+    // The margin's top can be far above what the user is reading, so the header says how many lost their place
+    lostJumpEl.hidden = lost.length === 0;
+    if (lost.length > 0) lostJumpEl.textContent = S.lostJump(lost.length);
 
     var entries = visibleComments().map(function (c) {
       return { comment: c, top: firstMark[c.id] ? firstMark[c.id].offsetTop : 0, start: c.start };
