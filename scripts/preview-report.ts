@@ -53,6 +53,11 @@ window.__reportboardPoll = async () => {
   return { replaceUrl: null, report: null, threads, missing: false, waiting: ${simulateAi} };
 };
 window.__reportboardOpen = async (href) => console.log("open", href);
+window.__reportboardLog = async (text) => console.log("log", text);
+window.__reportboardReset = async () => {
+  window.__previewThreads = [];
+  return { ok: true, threads: [] };
+};
 // Threads live in the page only (no AI answers in the preview)
 window.__previewThreads = ${JSON.stringify(savedThreads).replaceAll("</", "<\\/")};
 window.__reportboardSend = async ({ threadId, section, text }) => {

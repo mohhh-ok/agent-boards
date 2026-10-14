@@ -3,7 +3,7 @@
 // `<command> watch --target <name>` (keeps running, one line per instruction) takes and deletes it.
 // Instructions sent while nobody is receiving are kept and taken by the next wait or watch, all of them at once.
 // A running wait or watch leaves a marker in targets/<name>.waiters/<pid>, so the window can show whether the AI is waiting.
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { WindowHost } from "./windows.ts";
@@ -86,6 +86,23 @@ export function createOutbox(host: WindowHost) {
       }
     }
     return found;
+  }
+
+  // Withdraw the instructions not yet taken that match. One a wait or watch takes meanwhile is left to it.
+  // Returns how many were withdrawn
+  function discard(target: string, matches: (instruction: Record<string, unknown>) => boolean): number {
+    let count = 0;
+    for (const id of pendingIds(target)) {
+      const path = join(outboxDir(target), `${id}.json`);
+      try {
+        if (!matches(JSON.parse(readFileSync(path, "utf8")))) continue;
+        unlinkSync(path);
+        count += 1;
+      } catch {
+        // Taken meanwhile
+      }
+    }
+    return count;
   }
 
   // The targets that have an outbox
@@ -220,5 +237,5 @@ export function createOutbox(host: WindowHost) {
     }
   }
 
-  return { outboxDir, waitersDir, prepare, send, pendingIds, pending, targets, take, takeAll, waiterAlive, lastWaitStarted, wait, watch };
+  return { outboxDir, waitersDir, prepare, send, pendingIds, pending, discard, targets, take, takeAll, waiterAlive, lastWaitStarted, wait, watch };
 }

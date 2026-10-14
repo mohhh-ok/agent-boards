@@ -16,7 +16,8 @@ export type ThreadMessage = { from: "user" | "ai"; text: string; at: string; rec
 export type RowRef = { name: string; occurrence: number };
 export type SectionRef = { level: number; text: string; occurrence: number; row?: RowRef };
 export type Thread = { id: string; heading: SectionRef; messages: ThreadMessage[] };
-export type ThreadFile = { file: string; threads: Thread[] };
+// resetThreadIds: threads the user cleared from the window (resetThreads), so a late reply can say so
+export type ThreadFile = { file: string; threads: Thread[]; resetThreadIds?: string[] };
 // A section of the rendered report a thread can sit on
 export type Section = SectionRef & { id: string };
 
@@ -72,6 +73,26 @@ export function addReply(params: { home: string; threadId: string; text: string;
     thread.messages.push({ from: "ai", text: params.text, at });
     return true;
   });
+}
+
+// The user cleared the report's conversations in the window. The report itself is not touched. Returns the ids removed
+export function resetThreads(params: { home: string; reportPath: string }): string[] {
+  const path = threadsPath(params.home, params.reportPath);
+  if (!existsSync(path)) return [];
+  return withThreadsLock(path, () => {
+    const data = readThreads(params.home, params.reportPath);
+    const ids = data.threads.map((t) => t.id);
+    if (ids.length === 0) return [];
+    writeThreads(params.home, params.reportPath, { ...data, threads: [], resetThreadIds: [...(data.resetThreadIds ?? []), ...ids] });
+    return ids;
+  });
+}
+
+// Whether the thread was cleared by the user (resetThreads), for a reply that comes after
+export function wasReset(home: string, threadId: string): boolean {
+  const dir = threadsDir(home);
+  if (!existsSync(dir)) return false;
+  return readdirSync(dir).some((name) => name.endsWith(".json") && parseThreadFile(join(dir, name))?.resetThreadIds?.includes(threadId) === true);
 }
 
 // Note that `wait` handed the user's message sent at `sentAt` to the AI. False when the message is not there

@@ -31,7 +31,7 @@ import { applyLang, createI18n, type Lang } from "./lib/lang.ts";
 import { createWindowHost, isValidTargetName } from "./lib/windows.ts";
 import { renderReport } from "./lib/report.ts";
 import { OUTBOX_DIR_NAME, createOutbox } from "./lib/outbox.ts";
-import { addReply, addUserMessage, markReceived, placeThreads, readThreads, rememberPlaces, threadState, threadsPath, type SectionRef } from "./lib/threads.ts";
+import { addReply, addUserMessage, markReceived, placeThreads, readThreads, rememberPlaces, resetThreads, threadState, threadsPath, wasReset, type SectionRef } from "./lib/threads.ts";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const htmlPath = resolve(dirname(scriptPath), "reportboard.html");
@@ -70,6 +70,7 @@ const MESSAGES = {
     waitTimeout: (target: string) => `target=${target} から指示が来ないまま --timeout が過ぎました`,
     replyUsage: "reply は --thread <id> と、本文か --file <path> を指定してください",
     threadNotFound: (id: string) => `スレッドが見つかりません: ${id}`,
+    threadReset: (id: string) => `このやり取りは窓でリセットされました。返事は表示されません。このやり取りの作業はやめてください: ${id}`,
     loadFailed: (detail: string) => `窓は開きましたが、レポートを読み込めませんでした: ${detail}`,
     emptyReply: "返事の本文が空です",
     unread: (target: string, n: number) => `未読 ${n} 件: 窓から送られてまだ受け取っていないメッセージがあります。reportboard wait --target ${target} で受け取ってください`,
@@ -93,6 +94,7 @@ const MESSAGES = {
     waitTimeout: (target: string) => `No instruction came from target=${target} before --timeout`,
     replyUsage: "reply needs --thread <id> and either the text or --file <path>",
     threadNotFound: (id: string) => `Thread not found: ${id}`,
+    threadReset: (id: string) => `The user reset this conversation in the window. The reply is not shown; stop working on it: ${id}`,
     loadFailed: (detail: string) => `The window opened but could not read the report: ${detail}`,
     emptyReply: "The reply is empty",
     unread: (target: string, n: number) => `unread ${n}: messages from the window nobody has taken yet. Take them with reportboard wait --target ${target}`,
@@ -165,7 +167,7 @@ function reply(args: string[]): number {
   const text = (filePath === null ? words.join(" ") : readFileSync(resolve(filePath), "utf8")).trim();
   if (text === "") fatal(i18n.M.emptyReply);
   const result = addReply({ home: HOME, threadId, text, done });
-  if (result === null) fatal(i18n.M.threadNotFound(threadId));
+  if (result === null) fatal(wasReset(HOME, threadId) ? i18n.M.threadReset(threadId) : i18n.M.threadNotFound(threadId));
   console.log(`replied thread=${threadId}${done ? " done" : ""} file=${result.file}`);
   // Messages from the same report nobody has taken yet: an agent that answers without receiving again would miss them
   for (const target of outbox.targets()) {
@@ -241,20 +243,26 @@ type DiskStamp = { mtimeMs: number; size: number } | null;
 function runWindow(config: WindowConfig) {
   host.registerWindow(config.target);
 
-  // The open file and its state on disk when last rendered. Used to follow changes to the file
+  // The open file. Which version of the file the page shows is kept by the page and sent with every poll (docs/design.md
+  // "書き換えた版を取りこぼさない"), so a rendering that failed or never reached the page is sent again on the next poll
   let currentPath: string | null = null;
-  let lastStamp: DiskStamp = null;
-  let lastThreadsStamp: DiskStamp = null;
-  // A new `wait` ends "working" on the threads (lib/threads.ts threadState), so the threads are re-sent when it changes
-  let lastWaitStarted: number | null = null;
+  // The last rendering error written to the log, so a failure repeated on every poll is logged once
+  let lastRenderError: string | null = null;
   let sections: ReturnType<typeof renderReport>["sections"] = [];
   if (config.target !== null) outbox.prepare(config.target);
   const canTalk = config.target !== null;
 
+  // The threads as the page should show them: they change with the threads file, and with a new `wait`, which ends
+  // "working" (lib/threads.ts threadState). Like the report, the page sends back the version it shows
+  const threadsVersion = () => {
+    if (currentPath === null) return null;
+    const stamp = stampOf(threadsPath(HOME, currentPath));
+    const waitStarted = config.target === null ? null : outbox.lastWaitStarted(config.target);
+    return `${stamp?.mtimeMs ?? "-"}:${stamp?.size ?? "-"}:${waitStarted ?? "-"}`;
+  };
   const threadsNow = () => {
     if (currentPath === null) return [];
-    lastThreadsStamp = stampOf(threadsPath(HOME, currentPath));
-    lastWaitStarted = config.target === null ? null : outbox.lastWaitStarted(config.target);
+    const waitStarted = config.target === null ? null : outbox.lastWaitStarted(config.target);
     const placed = placeThreads(readThreads(HOME, currentPath).threads, sections);
     const renamed = placed.filter((t) => t.placement === "renamed" && t.place !== null).map((t) => ({ id: t.id, from: t.heading, to: t.place as SectionRef }));
     if (renamed.length > 0) {
@@ -265,12 +273,15 @@ function runWindow(config: WindowConfig) {
         console.error(`could not save where the threads moved: ${(error as Error).message}`);
       }
     }
-    return placed.map((thread) => ({ ...thread, state: threadState(thread, lastWaitStarted) }));
+    return placed.map((thread) => ({ ...thread, state: threadState(thread, waitStarted) }));
   };
   const renderNow = (path: string) => {
     const report = renderFile(path);
     sections = report.sections;
-    return { ...report, canTalk, threads: threadsNow() };
+    webview.title = `${report.title ?? basename(path)} — reportboard${config.target === null ? "" : ` ${config.target}`}`;
+    // Taken before reading, so a change landing in between is sent again
+    const version = threadsVersion();
+    return { ...report, canTalk, threads: threadsNow(), threadsVersion: version };
   };
 
   const webview = new Webview();
@@ -286,10 +297,7 @@ function runWindow(config: WindowConfig) {
     try {
       const board = host.takeBoard<Board>(rid);
       currentPath = board.path;
-      lastStamp = stampOf(board.path);
-      const report = renderNow(board.path);
-      webview.title = `${report.title ?? basename(board.path)} — reportboard${config.target === null ? "" : ` ${config.target}`}`;
-      return report;
+      return renderNow(board.path);
     } catch (error) {
       return { error: (error as Error).message };
     }
@@ -299,27 +307,44 @@ function runWindow(config: WindowConfig) {
     host.writeAck(rid, { pid: process.pid, failed: failed ?? null } satisfies Ack);
   });
 
-  // Called by the page every 500 ms. Returns a replace request, and a new rendering when the file changed on disk
-  webview.bind("__reportboardPoll", () => {
-    const replaceUrl = config.target === null ? null : host.takeReplaceRequest(config.target);
+  // Called by the page every 500 ms with the version it shows (shown). Returns a replace request, and a new rendering
+  // when the file on disk is not that version. renderError: why the new version could not be rendered (sent again next time)
+  // shownThreads: the threadsVersion the page shows; the threads are sent until the page has shown the current ones.
+  // Nothing here may throw past the replace request: a thrown error loses the whole answer
+  webview.bind("__reportboardPoll", (shown: DiskStamp = null, shownThreads: string | null = null) => {
+    let replaceUrl: string | null = null;
+    try {
+      replaceUrl = config.target === null ? null : host.takeReplaceRequest(config.target);
+    } catch (error) {
+      console.error(`could not read the replace request: ${(error as Error).message}`);
+    }
     let report: ReturnType<typeof renderNow> | null = null;
+    let renderError: string | null = null;
     let threads: ReturnType<typeof threadsNow> | null = null;
+    let version: string | null = null;
     let missing = false;
     if (currentPath !== null) {
-      const stamp = stampOf(currentPath);
-      missing = stamp === null;
-      if (stamp !== null && !sameStamp(stamp, lastStamp)) {
-        lastStamp = stamp;
-        report = renderNow(currentPath);
-      } else if (
-        !sameStamp(stampOf(threadsPath(HOME, currentPath)), lastThreadsStamp) ||
-        (config.target !== null && outbox.lastWaitStarted(config.target) !== lastWaitStarted)
-      ) {
-        threads = threadsNow();
+      try {
+        const path = currentPath;
+        const next = nextRendering({ path, shown, render: () => renderNow(path) });
+        missing = next.missing;
+        report = next.report;
+        renderError = next.error?.message ?? null;
+        if (next.error !== null && renderError !== lastRenderError) console.error(`could not render ${path}: ${next.error.stack}`);
+        lastRenderError = renderError;
+        if (next.unchanged) {
+          version = threadsVersion();
+          if (version !== shownThreads) threads = threadsNow();
+        }
+      } catch (error) {
+        const message = (error as Error).message;
+        if (message !== lastRenderError) console.error(`could not read the conversations: ${(error as Error).stack}`);
+        lastRenderError = message;
+        renderError = message;
       }
     }
     const waiting = config.target !== null && outbox.waiterAlive(config.target);
-    return { replaceUrl, report, threads, missing, waiting };
+    return { replaceUrl, report, renderError, threads, threadsVersion: threads === null ? null : version, missing, waiting };
   });
 
   // The user sends something from a section: append it to the thread and queue it for `wait`
@@ -345,6 +370,26 @@ function runWindow(config: WindowConfig) {
     }
   });
 
+  // The user resets the report from the top bar: its conversations go, and so do the messages from it nobody has taken
+  // yet (from any window showing it), so no AI later gets a message whose conversation is gone. The report is not touched
+  webview.bind("__reportboardReset", () => {
+    if (config.target === null || currentPath === null) return { ok: false, error: "no target" };
+    const path = currentPath;
+    try {
+      const removed = resetThreads({ home: HOME, reportPath: path });
+      const withdrawn = outbox.targets().reduce((sum, target) => sum + outbox.discard(target, (m) => m.file === path), 0);
+      console.error(`reset ${path}: ${removed.length} conversations, ${withdrawn} messages not taken`);
+      return { ok: true, threads: threadsNow() };
+    } catch (error) {
+      return { ok: false, error: (error as Error).message };
+    }
+  });
+
+  // The page reports here what went wrong on its side, so it reaches the window's log
+  webview.bind("__reportboardLog", (text: string) => {
+    console.error(`page: ${text}`);
+  });
+
   // Links leave the window. Web pages open in the browser. A local file is only revealed in Finder, never opened,
   // because `open` would launch an app or a script that a link in the Markdown points at
   webview.bind("__reportboardOpen", (href: string) => {
@@ -365,10 +410,13 @@ function runWindow(config: WindowConfig) {
   host.cleanupWindow(config);
 }
 
+// stamp: the version rendered, which the page sends back with each poll. Taken before reading, so a write landing in
+// between makes the next poll render again rather than be missed
 function renderFile(path: string) {
-  const markdown = readFileSync(path, "utf8");
   const stat = statSync(path);
-  return { path, name: basename(path), dir: dirname(path), modifiedAt: stat.mtimeMs, ...renderReport(markdown, { baseDir: dirname(path) }) };
+  const markdown = readFileSync(path, "utf8");
+  const stamp = { mtimeMs: stat.mtimeMs, size: stat.size };
+  return { path, name: basename(path), dir: dirname(path), modifiedAt: stat.mtimeMs, stamp, ...renderReport(markdown, { baseDir: dirname(path) }) };
 }
 
 export function openArgsFor(href: string, reportPath: string | null): string[] | null {
@@ -376,6 +424,24 @@ export function openArgsFor(href: string, reportPath: string | null): string[] |
   if (/^[a-z][a-z0-9+.-]*:/i.test(href) || reportPath === null) return null;
   const path = resolve(dirname(reportPath), decodeURIComponent(href.split("#")[0]));
   return existsSync(path) ? ["-R", path] : null;
+}
+
+// What a poll sends for the report: a new rendering when the file on disk is not the version the page shows (shown).
+// Nothing is remembered here, so when rendering fails, the next poll tries again. unchanged: the page is up to date
+export function nextRendering<R>(params: { path: string; shown: DiskStamp; render: () => R }): {
+  report: R | null;
+  error: Error | null;
+  missing: boolean;
+  unchanged: boolean;
+} {
+  const stamp = stampOf(params.path);
+  if (stamp === null) return { report: null, error: null, missing: true, unchanged: false };
+  if (sameStamp(stamp, params.shown)) return { report: null, error: null, missing: false, unchanged: true };
+  try {
+    return { report: params.render(), error: null, missing: false, unchanged: false };
+  } catch (error) {
+    return { report: null, error: error as Error, missing: false, unchanged: false };
+  }
 }
 
 function stampOf(path: string): DiskStamp {

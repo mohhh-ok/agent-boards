@@ -76,6 +76,7 @@ Each message:
 - `section.row` is there when it was sent from a row of a breakdown (each row has its own button): `{ "level": 2, "heading": "内訳", "row": "A. カメラ本人認証 (identity-verification.md)" }`. The message is about that item — the line starting with that name under that heading, and what is nested under it. Change that item; when its number changes, check the total and anything else that adds it up
 - rc: 0 = got some / 1 = the window is not open / 2 = `--timeout` passed / 3 = the user closed the window (stop receiving)
 - The reply is plain text shown in the section. Keep it short. After an edit, say which part changed and how; for a question, answer it
+- The user can reset a report's conversations from the window. If `reply` says the conversation was reset, stop working on that message: the user dropped it, and nothing you send there is shown. Do not retry or start it again unless the user asks
 
 ## Closing
 

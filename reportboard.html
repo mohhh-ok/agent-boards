@@ -312,6 +312,8 @@
     border: 1px solid var(--line); border-radius: 4px;
     padding: 7px 10px; resize: vertical; min-height: 38px; line-height: 1.6;
   }
+  /* The hint in the empty box takes two lines below this width; one line would cut the second off */
+  @media (max-width: 1399px) { .composer textarea { min-height: calc(3.2em + 16px); } }
   .composer textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   .send-button {
     align-self: start;
@@ -332,6 +334,33 @@
   .orphans h2 { display: block; }
   .orphans .orphans-hint { color: var(--sub); font-size: 14px; }
   .topbar .lost-jump { white-space: nowrap; color: var(--warn); }
+  .topbar .reset-button { white-space: nowrap; color: var(--sub); }
+  /* No padding in the bar, so it keeps its height whether its buttons are shown or not */
+  .topbar .text-button { padding-block: 0; }
+  .topbar .reset-button[hidden] { display: none; }
+  /* Asked in the window before conversations are deleted: a strip hanging under the bar over the report, the same
+     wherever the page is scrolled */
+  .reset-confirm {
+    position: absolute; top: 100%; left: 0; right: 0;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;
+    padding: 10px 28px;
+    background: var(--warn-bg); border-bottom: 1px solid var(--line);
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.08);
+    font-size: 14px;
+  }
+  .reset-confirm[hidden] { display: none; }
+  .reset-confirm .reset-text { flex: 1 1 32em; margin: 0; color: var(--text); }
+  .reset-confirm .reset-actions { display: flex; gap: 8px; }
+  .reset-confirm button {
+    font: inherit; font-size: 14px; font-weight: 600;
+    border-radius: 4px; padding: 6px 14px; cursor: pointer;
+  }
+  .reset-confirm .reset-do { color: #fff; background: var(--warn); border: 1px solid var(--warn); }
+  @media (prefers-color-scheme: dark) { .reset-confirm .reset-do { color: #10131a; } }
+  .reset-confirm .reset-cancel { color: var(--text); background: var(--page); border: 1px solid var(--line); }
+  .reset-confirm button:disabled { opacity: 0.5; cursor: default; }
+  /* The chosen button shows, so a stray Enter is not a surprise */
+  .reset-confirm button:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
   .topbar .lost-jump[hidden] { display: none; }
 
   /* ---- states ---- */
@@ -346,6 +375,14 @@
   <button type="button" class="text-button lost-jump" id="lost-jump" hidden></button>
   <button type="button" class="text-button changes-jump" id="changes-jump" hidden></button>
   <span class="status" id="status"></span>
+  <button type="button" class="text-button reset-button" id="reset" hidden></button>
+  <div class="reset-confirm" id="reset-confirm" role="alertdialog" aria-labelledby="reset-text" hidden>
+    <p class="reset-text" id="reset-text"></p>
+    <div class="reset-actions">
+      <button type="button" class="reset-do" id="reset-do" data-i18n="resetDo"></button>
+      <button type="button" class="reset-cancel" id="reset-cancel" data-i18n="resetCancel"></button>
+    </div>
+  </div>
 </header>
 <div class="shell">
   <nav class="toc" id="toc" hidden>
@@ -366,6 +403,17 @@ const STRINGS = {
     changes: (n) => `変わった所 ${n} か所 — 見る`,
     openedAt: (time) => `${time} 更新のファイル`,
     missing: "ファイルが見つかりません（移動か削除されました）。最後に読んだ内容を表示しています",
+    renderFailed: (e) => `書き換わった内容を表示できませんでした。読み直しを続けます: ${e}`,
+    reset: "やり取りと印をリセット",
+    resetMarks: "変わった所の印を消す",
+    resetAsk: (n) => `このレポートの AI とのやり取り ${n} 件と、変わった所の印を消します。元に戻せません。レポートの中身は変わりません。`,
+    resetNotTaken: (n) => `AI がまだ受け取っていないメッセージ ${n} 件は、AI に届かなくなります。`,
+    resetWorking: (n) => `AI が作業中のやり取りが ${n} 件あります。この後の AI の返事は出ません。`,
+    resetDo: "消す",
+    resetCancel: "やめる",
+    resetDone: "やり取りと印を消しました",
+    marksCleared: "変わった所の印を消しました",
+    resetFailed: (e) => `消せませんでした: ${e}`,
     more: "続きを読む",
     less: "閉じる",
     barScale: (max) => `棒の長さは、この一覧で最大の ${max} に対する割合`,
@@ -405,6 +453,17 @@ const STRINGS = {
     changes: (n) => `${n} change${n === 1 ? "" : "s"} — show`,
     openedAt: (time) => `File updated ${time}`,
     missing: "The file is gone (moved or deleted). Showing what was last read",
+    renderFailed: (e) => `Could not show the new version; still trying: ${e}`,
+    reset: "Reset conversations and marks",
+    resetMarks: "Clear the change marks",
+    resetAsk: (n) => `This deletes the ${n} conversation${n === 1 ? "" : "s"} with the AI on this report and the change marks. It cannot be undone. The report itself does not change.`,
+    resetNotTaken: (n) => `${n} message${n === 1 ? "" : "s"} the AI has not taken yet will not reach it.`,
+    resetWorking: (n) => `The AI is working on ${n} of them. Its replies will not be shown.`,
+    resetDo: "Delete",
+    resetCancel: "Cancel",
+    resetDone: "Deleted the conversations and marks",
+    marksCleared: "Cleared the change marks",
+    resetFailed: (e) => `Could not delete: ${e}`,
     more: "Read more",
     less: "Show less",
     barScale: (max) => `Bars show each value against the largest in this list (${max})`,
@@ -688,7 +747,10 @@ function threadPanel(thread) {
 // - threads whose heading is gone too go to a box near the top of the report, and the top bar says how many there are
 function renderThreads(next) {
   threads = next ?? [];
-  if (!canTalk) return;
+  if (!canTalk) {
+    updateReset();
+    return;
+  }
   const own = new Map();
   const extra = new Map();
   const lost = [];
@@ -745,6 +807,7 @@ function renderThreads(next) {
   $lostJump.hidden = lost.length === 0;
   if (lost.length > 0) $lostJump.textContent = T.lostJump(lost.length);
   updateWaiting();
+  updateReset();
 }
 
 function fillPanel(panel, thread) {
@@ -975,7 +1038,99 @@ function markChanges(before) {
   }
   $jump.hidden = changed.length === 0;
   if (changed.length > 0) $jump.textContent = T.changes(changed.length);
+  updateReset();
 }
+
+function clearMarks() {
+  for (const el of changed) el.classList.remove("is-changed");
+  changed.length = 0;
+  changeIndex = 0;
+  $jump.hidden = true;
+}
+
+// ---------------- Reset: the conversations and the change marks ----------------
+const $reset = document.getElementById("reset");
+const $resetConfirm = document.getElementById("reset-confirm");
+const $resetText = document.getElementById("reset-text");
+const $resetDo = document.getElementById("reset-do");
+const $resetCancel = document.getElementById("reset-cancel");
+
+function updateReset() {
+  const hasThreads = canTalk && threads.length > 0;
+  $reset.hidden = !hasThreads && changed.length === 0;
+  $reset.textContent = canTalk ? T.reset : T.resetMarks;
+  if (!hasThreads) closeResetConfirm();
+  else if (!$resetConfirm.hidden) $resetText.textContent = resetQuestion();
+}
+
+// What goes, counted from the conversations: messages after the AI's last reply that no AI has taken, and conversations
+// the AI is still working on
+function resetQuestion() {
+  let notTaken = 0;
+  for (const thread of threads) {
+    const lastAi = thread.messages.findLastIndex((m) => m.from === "ai");
+    notTaken += thread.messages.filter((m, i) => i > lastAi && m.from === "user" && !m.receivedAt).length;
+  }
+  const working = threads.filter((t) => t.state === "received" || t.state === "working").length;
+  return [T.resetAsk(threads.length), notTaken > 0 ? T.resetNotTaken(notTaken) : "", working > 0 ? T.resetWorking(working) : ""].filter(Boolean).join(lang === "ja" ? "" : " ");
+}
+
+function closeResetConfirm() {
+  $resetConfirm.hidden = true;
+  $reset.setAttribute("aria-expanded", "false");
+}
+
+$reset.addEventListener("click", () => {
+  if (!(canTalk && threads.length > 0)) {
+    // Only marks: nothing that cannot come back, so no question
+    clearMarks();
+    updateReset();
+    setStatus(T.marksCleared, "fresh");
+    clearTimeout(statusTimer);
+    statusTimer = setTimeout(() => setStatus(T.openedAt(timeOf(shownModifiedAt))), 4000);
+    return;
+  }
+  if (!$resetConfirm.hidden) {
+    closeResetConfirm();
+    return;
+  }
+  $resetText.textContent = resetQuestion();
+  $resetDo.disabled = false;
+  $resetConfirm.hidden = false;
+  $reset.setAttribute("aria-expanded", "true");
+  // The safe choice has the focus, so a stray Enter does not delete
+  $resetCancel.focus();
+});
+$resetCancel.addEventListener("click", () => {
+  closeResetConfirm();
+  $reset.focus();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !$resetConfirm.hidden) {
+    closeResetConfirm();
+    $reset.focus();
+  }
+});
+$resetDo.addEventListener("click", async () => {
+  $resetDo.disabled = true;
+  try {
+    const result = await window.__reportboardReset();
+    if (!result.ok) throw new Error(result.error);
+    clearMarks();
+    drafts.clear();
+    openPanels.clear();
+    seenPanels.clear();
+    for (const box of document.querySelectorAll(".thread textarea")) box.value = "";
+    renderThreads(result.threads);
+    closeResetConfirm();
+    setStatus(T.resetDone, "fresh");
+    clearTimeout(statusTimer);
+    statusTimer = setTimeout(() => setStatus(T.openedAt(timeOf(shownModifiedAt))), 4000);
+  } catch (error) {
+    $resetText.textContent = T.resetFailed(error?.message ?? error);
+    $resetDo.disabled = false;
+  }
+});
 
 $jump.addEventListener("click", () => {
   if (changed.length === 0) return;
@@ -1007,9 +1162,46 @@ function keepInView(viewed) {
   if (Math.abs(shift) > 1) window.scrollBy(0, shift);
 }
 
+// The version of the file on screen ({ mtimeMs, size }), sent with every poll: the window sends a new rendering until
+// the page has shown it, so a rendering that failed or was lost is not skipped (docs/design.md "書き換えた版を取りこぼさない")
+let shownStamp = null;
+// The same for the conversations (the window's threadsVersion)
+let shownThreadsVersion = null;
+let shownModifiedAt = 0;
+// A poll that never answers would stop the polling; after this long the next one starts anyway
+const POLL_STALL_MS = 10_000;
+
+// Bound functions that return nothing may never settle, so this one is not awaited
+function logToWindow(text) {
+  Promise.resolve(window.__reportboardLog?.(text)).catch(() => {});
+}
+
+// Tried again on every poll; logged once per message
+let lastFailure = null;
+function failedToRender(message) {
+  setStatus(T.renderFailed(message), "warn");
+  if (message !== lastFailure) logToWindow(`could not show the new version: ${message}`);
+  lastFailure = message;
+}
+
+// After a rendering failed half-way, the screen holds a half-built version: the next try compares with, and scrolls
+// back to, the last version shown in full
+let failedBefore = null;
+
 async function poll() {
+  let stall = null;
   try {
-    const result = await window.__reportboardPoll();
+    const asked = window.__reportboardPoll(shownStamp, shownThreadsVersion);
+    const result = await Promise.race([
+      asked,
+      new Promise((_, reject) => {
+        stall = setTimeout(() => {
+          // An answer that comes after all may carry a replace request, which the window has already taken
+          Promise.resolve(asked).then((late) => late?.replaceUrl && location.replace(late.replaceUrl)).catch(() => {});
+          reject(new Error("the window did not answer"));
+        }, POLL_STALL_MS);
+      }),
+    ]);
     if (result.replaceUrl) {
       location.replace(result.replaceUrl);
       return;
@@ -1021,21 +1213,37 @@ async function poll() {
     const viewed = threadInView();
     if (result.threads) {
       renderThreads(result.threads);
+      shownThreadsVersion = result.threadsVersion;
       keepInView(viewed);
     }
     if (result.missing) setStatus(T.missing, "warn");
+    else if (result.renderError) failedToRender(result.renderError);
     else if (result.report) {
-      const y = window.scrollY;
-      const before = blockTexts();
-      render(result.report, { keepOpen: openRowKeys() });
-      window.scrollTo(0, y);
+      const before = failedBefore ?? { texts: blockTexts(), y: window.scrollY };
+      try {
+        render(result.report, { keepOpen: openRowKeys() });
+      } catch (error) {
+        failedBefore = before;
+        window.scrollTo(0, before.y);
+        failedToRender(error?.message ?? String(error));
+        return;
+      }
+      failedBefore = null;
+      shownStamp = result.report.stamp;
+      shownThreadsVersion = result.report.threadsVersion;
+      shownModifiedAt = result.report.modifiedAt;
+      lastFailure = null;
+      window.scrollTo(0, before.y);
       keepInView(viewed);
-      markChanges(before);
+      markChanges(before.texts);
       setStatus(T.reloaded(timeOf(Date.now())), "fresh");
       clearTimeout(statusTimer);
       statusTimer = setTimeout(() => setStatus(T.openedAt(timeOf(result.report.modifiedAt))), 4000);
     } else if ($status.classList.contains("is-warn")) setStatus("");
+  } catch (error) {
+    logToWindow(`poll failed: ${error?.message ?? error}`);
   } finally {
+    clearTimeout(stall);
     setTimeout(poll, 500);
   }
 }
@@ -1046,6 +1254,9 @@ let loadError = null;
     const report = await window.__reportboardLoad(rid);
     if (report.error) throw new Error(report.error);
     render(report, { keepOpen: new Set() });
+    shownStamp = report.stamp;
+    shownThreadsVersion = report.threadsVersion;
+    shownModifiedAt = report.modifiedAt;
     setStatus(T.openedAt(timeOf(report.modifiedAt)));
     loadError = null;
   } catch (error) {

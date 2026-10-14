@@ -11,7 +11,7 @@ reportboard --target <name> report.md
 ```
 
 - `--target` works as in moodboard: a window with the same name is reused and switched to the new file. Without `--target` a new unnamed window opens (it cannot talk to the AI; see below)
-- When the file changes on disk, the window reloads it and keeps the scroll position. The top bar says when it reloaded. Table rows, list items, paragraphs and headings that are new or different since the previous version get a mark (a bar on the left and a light tint) until the next reload, and the top bar shows "N changes — show", which moves to each in turn
+- When the file changes on disk (rewritten whole, edited in place or appended to), the window reloads it within a second and keeps the scroll position. The top bar and the window title follow it, and the top bar says when it reloaded. If the new version cannot be shown, the top bar says why and the window keeps trying. Table rows, list items, paragraphs and headings that are new or different since the previous version get a mark (a bar on the left and a light tint) until the next reload, and the top bar shows "N changes — show", which moves to each in turn
 - `reportboard --close <name>` closes that window; `reportboard --list` lists the open named windows
 - Exit codes: 0 = shown / 1 = bad arguments or path / 2 = not shown in time / 3 = the window opened but could not read the report (the reason is printed)
 
@@ -81,6 +81,12 @@ Exit codes of `wait`: 0 = got some / 1 = the window is not open / 2 = `--timeout
 When `wait` hands a message to the agent, the conversation shows "Got it. Writing a reply", and after the agent's first reply "Still working on it" under the latest reply, until the agent sends its last reply with `reply --done` (or starts the next `wait`). The agent replies at once with what it is going to do, again at each step that takes a while, and last with the result; replies in a row read as one.
 
 The agent edits the report when the message asks for a change and answers when it asks a question; either way it replies in the thread, saying what it changed.
+
+### Resetting
+
+"Reset conversations and marks" at the right end of the top bar clears the report open in that window: every conversation on it and the change marks. The Markdown is not touched, and other reports keep their conversations. Before deleting conversations, a strip under the top bar says what goes (how many conversations; messages the agent has not taken yet, which are withdrawn and never reach it; conversations the agent is working on) and asks "Delete" / "Cancel" (Esc cancels too). With only change marks, it clears them at once. The button is shown only when there is something to clear; an unnamed window has "Clear the change marks".
+
+A `reply` to a conversation the user reset fails with rc 1, saying the conversation was reset in the window and the reply is not shown.
 
 Conversations are kept in `~/.reportboard/threads/` (one file per report, named by the hash of its path), not next to the report. They survive reloading and reopening. Each one stays with its heading and row when the agent rewrites the report: it follows a heading whose numbers changed ("— 51 days" → "— 49 days") and a row that moved under another heading. When its row is gone, it stays under its heading, saying where it started; when its heading is gone too, it moves to "Conversations whose heading is gone" under the title, and the top bar says how many there are. The conversation you are looking at stays where it is on the screen. Moving or renaming the report detaches its conversations.
 

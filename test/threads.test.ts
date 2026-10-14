@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addReply, addUserMessage, markReceived, placeThreads, readThreads, rememberPlaces, threadState, threadsPath } from "../lib/threads.ts";
+import { addReply, addUserMessage, markReceived, placeThreads, readThreads, rememberPlaces, resetThreads, threadState, threadsPath, wasReset } from "../lib/threads.ts";
 import { createOutbox } from "../lib/outbox.ts";
 import { createWindowHost } from "../lib/windows.ts";
 
@@ -317,5 +317,59 @@ describe("broken thread files", () => {
     const t = addUserMessage({ home: dir, reportPath: "/r/ok.md", threadId: null, section: { level: 2, text: "x", occurrence: 0 }, text: "q" });
     require("node:fs").writeFileSync(join(dir, "threads", "0broken.json"), "{");
     expect(addReply({ home: dir, threadId: t.id, text: "a" })?.file).toBe("/r/ok.md");
+  });
+});
+
+describe("resetting a report's conversations", () => {
+  const section = { level: 2, text: "結果", occurrence: 0 };
+
+  test("only that report's conversations go; a late reply is told it was reset, and the report can start again", () => {
+    const a = addUserMessage({ home: dir, reportPath: "/r/a.md", threadId: null, section, text: "q" });
+    const other = addUserMessage({ home: dir, reportPath: "/r/b.md", threadId: null, section, text: "keep" });
+    expect(resetThreads({ home: dir, reportPath: "/r/a.md" })).toEqual([a.id]);
+    expect(readThreads(dir, "/r/a.md").threads).toEqual([]);
+    expect(readThreads(dir, "/r/b.md").threads.map((t) => t.id)).toEqual([other.id]);
+    expect(addReply({ home: dir, threadId: a.id, text: "late" })).toBeNull();
+    expect(wasReset(dir, a.id)).toBe(true);
+    expect(wasReset(dir, other.id)).toBe(false);
+    expect(wasReset(dir, "t-unknown")).toBe(false);
+    // A new conversation on the same section, and a second reset that keeps the first one's ids
+    const again = addUserMessage({ home: dir, reportPath: "/r/a.md", threadId: null, section, text: "again" });
+    expect(again.id).not.toBe(a.id);
+    expect(readThreads(dir, "/r/a.md").threads).toHaveLength(1);
+    resetThreads({ home: dir, reportPath: "/r/a.md" });
+    expect(wasReset(dir, a.id) && wasReset(dir, again.id)).toBe(true);
+  });
+
+  test("reply to a conversation the user reset says so, in Japanese and English", () => {
+    const thread = addUserMessage({ home: dir, reportPath: "/r/a.md", threadId: null, section, text: "q" });
+    resetThreads({ home: dir, reportPath: "/r/a.md" });
+    const script = join(import.meta.dir, "../reportboard.ts");
+    for (const [lang, text] of [["en", "The user reset this conversation in the window"], ["ja", "このやり取りは窓でリセットされました"]]) {
+      const run = Bun.spawnSync(["bun", script, "--lang", lang, "reply", "--thread", thread.id, "late"], { env: { ...process.env, REPORTBOARD_HOME: dir } });
+      expect(run.exitCode).toBe(1);
+      expect(run.stderr.toString()).toContain(text);
+    }
+    const unknown = Bun.spawnSync(["bun", script, "--lang", "en", "reply", "--thread", "t-000000000000", "x"], { env: { ...process.env, REPORTBOARD_HOME: dir } });
+    expect(unknown.stderr.toString()).toContain("Thread not found");
+  });
+
+  test("a report without conversations resets to nothing", () => {
+    expect(resetThreads({ home: dir, reportPath: "/r/none.md" })).toEqual([]);
+  });
+
+  test("the messages from that report nobody has taken are withdrawn; others stay", () => {
+    const host = createWindowHost({ name: "t", scriptPath: "/x.ts", htmlPath: "/x.html", stateDir: join(dir, "state"), extraDirs: ["outbox"] });
+    host.ensureStateDir((d) => {
+      throw new Error(d);
+    });
+    const outbox = createOutbox(host);
+    outbox.send("w", { file: "/r/a.md", text: "1" });
+    outbox.send("w", { file: "/r/b.md", text: "2" });
+    outbox.send("v", { file: "/r/a.md", text: "3" });
+    const withdrawn = outbox.targets().reduce((sum, target) => sum + outbox.discard(target, (m) => m.file === "/r/a.md"), 0);
+    expect(withdrawn).toBe(2);
+    expect(outbox.pending("w").map((m) => m.text)).toEqual(["2"]);
+    expect(outbox.pending("v")).toEqual([]);
   });
 });

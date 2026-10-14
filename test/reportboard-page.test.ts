@@ -22,6 +22,11 @@ async function openPage(md: string, threads: unknown[], next?: string) {
   const stubs = `<script>
 window.__reportboardLoad = async () => (${JSON.stringify(report).replaceAll("</", "<\\/")});
 window.__reportboardReady = async () => {};
+window.__resets = 0;
+window.__reportboardReset = async () => {
+  window.__resets += 1;
+  return { ok: true, threads: [] };
+};
 let pendingEdit = ${JSON.stringify(edited).replaceAll("</", "<\\/")};
 window.__reportboardPoll = async () => {
   const report = pendingEdit;
@@ -153,5 +158,69 @@ describe("reportboard page", () => {
     expect(marked.length).toBe(1);
     expect(marked[0].classList.contains("ledger-row")).toBe(true);
     expect(marked[0].textContent).toContain("A. Camera");
+  });
+
+  test("reset asks in the window, then clears the conversations and the change marks; cancelling keeps them", async () => {
+    const md = "## Result\n\nText\n\n## Notes\n\nOld note\n";
+    const threads = [
+      {
+        id: "t-1",
+        heading: { level: 2, text: "Result", occurrence: 0 },
+        sectionId: "section-1",
+        placement: "exact",
+        state: "sent",
+        messages: [
+          { from: "user", text: "Fix it", at: "2026-10-14T01:00:00.000Z" },
+          { from: "user", text: "And this", at: "2026-10-14T01:00:05.000Z" },
+        ],
+      },
+    ];
+    const document = await openPage(md, threads, md.replace("Old note", "New note"));
+    for (let i = 0; i < 200 && document.querySelector(".is-changed") === null; i++) await Bun.sleep(10);
+    const w = document.defaultView as unknown as { __resets: number };
+    const hidden = (id: string) => (document.getElementById(id) as unknown as { hidden: boolean }).hidden;
+    const reset = document.getElementById("reset") as unknown as HTMLButtonElement;
+    expect(hidden("reset")).toBe(false);
+    expect(reset.textContent).toBe("Reset conversations and marks");
+    expect(hidden("reset-confirm")).toBe(true);
+
+    reset.click();
+    expect(hidden("reset-confirm")).toBe(false);
+    expect(document.getElementById("reset-text")!.textContent).toBe(
+      "This deletes the 1 conversation with the AI on this report and the change marks. It cannot be undone. The report itself does not change. 2 messages the AI has not taken yet will not reach it.",
+    );
+    // The safe choice has the focus
+    expect(document.activeElement?.id).toBe("reset-cancel");
+    (document.getElementById("reset-cancel") as unknown as HTMLButtonElement).click();
+    expect(hidden("reset-confirm")).toBe(true);
+    expect(w.__resets).toBe(0);
+    expect(document.querySelectorAll(".message-item").length).toBe(2);
+
+    reset.click();
+    (document.getElementById("reset-do") as unknown as HTMLButtonElement).click();
+    for (let i = 0; i < 100 && w.__resets === 0; i++) await Bun.sleep(10);
+    await Bun.sleep(10);
+    expect(w.__resets).toBe(1);
+    expect(document.querySelectorAll(".message-item").length).toBe(0);
+    expect(document.querySelectorAll(".is-changed").length).toBe(0);
+    expect(hidden("changes-jump")).toBe(true);
+    expect(hidden("reset-confirm")).toBe(true);
+    // Nothing left to reset
+    expect(hidden("reset")).toBe(true);
+    expect(document.getElementById("status")!.textContent).toBe("Deleted the conversations and marks");
+    for (const panel of document.querySelectorAll(".thread")) expect((panel as unknown as { hidden: boolean }).hidden).toBe(true);
+  });
+
+  test("with only change marks, reset clears them without asking and touches no conversation", async () => {
+    const md = "## Notes\n\nOld note\n";
+    const document = await openPage(md, [], md.replace("Old note", "New note"));
+    for (let i = 0; i < 200 && document.querySelector(".is-changed") === null; i++) await Bun.sleep(10);
+    const reset = document.getElementById("reset") as unknown as HTMLButtonElement;
+    reset.click();
+    expect((document.getElementById("reset-confirm") as unknown as { hidden: boolean }).hidden).toBe(true);
+    expect(document.querySelectorAll(".is-changed").length).toBe(0);
+    expect((document.defaultView as unknown as { __resets: number }).__resets).toBe(0);
+    expect((reset as unknown as { hidden: boolean }).hidden).toBe(true);
+    expect(document.getElementById("status")!.textContent).toBe("Cleared the change marks");
   });
 });
