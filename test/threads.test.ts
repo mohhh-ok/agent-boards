@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addReply, addUserMessage, markReceived, placeThreads, readThreads, rememberPlaces, resetThreads, threadState, threadsPath, wasReset } from "../lib/threads.ts";
@@ -320,6 +320,46 @@ describe("broken thread files", () => {
   });
 });
 
+describe("reply command", () => {
+  const section = { level: 2, text: "結果", occurrence: 0 };
+  const script = join(import.meta.dir, "../reportboard.ts");
+  const run = (...args: string[]) => Bun.spawnSync(["bun", script, ...args], { env: { ...process.env, REPORTBOARD_HOME: dir } });
+
+  test("the text comes from --file; with --done the reply ends the work", () => {
+    const thread = addUserMessage({ home: dir, reportPath: "/r/a.md", threadId: null, section, text: "q" });
+    const body = join(dir, "reply.md");
+    writeFileSync(body, "Added a total row\n");
+    const sent = run("--lang", "en", "reply", "--thread", thread.id, "--done", "--file", body);
+    expect(sent.exitCode).toBe(0);
+    expect(sent.stdout.toString()).toContain(`replied thread=${thread.id} done`);
+    expect(readThreads(dir, "/r/a.md").threads[0].messages.map((m) => `${m.from}:${m.text}`)).toEqual(["user:q", "ai:Added a total row"]);
+  });
+
+  test("the text as an argument is refused and points to --file, in Japanese and English; nothing is added", () => {
+    const thread = addUserMessage({ home: dir, reportPath: "/r/a.md", threadId: null, section, text: "q" });
+    const body = join(dir, "reply.md");
+    writeFileSync(body, "from the file");
+    for (const [lang, text] of [["en", "Write it to a file and pass --file <path>"], ["ja", "--file <path> で渡してください"]]) {
+      for (const args of [["reply", "--thread", thread.id, "answer"], ["reply", "--thread", thread.id, "--file", body, "answer"]]) {
+        const refused = run("--lang", lang, ...args);
+        expect(refused.exitCode).toBe(1);
+        expect(refused.stderr.toString()).toContain(text);
+      }
+    }
+    expect(readThreads(dir, "/r/a.md").threads[0].messages).toHaveLength(1);
+  });
+
+  test("--thread and --file are both needed", () => {
+    const body = join(dir, "reply.md");
+    writeFileSync(body, "x");
+    for (const args of [["reply", "--file", body], ["reply", "--thread", "t-000000000000"], ["reply", "--thread", "t-000000000000", "--done"]]) {
+      const refused = run("--lang", "en", ...args);
+      expect(refused.exitCode).toBe(1);
+      expect(refused.stderr.toString()).toContain("reply needs --thread <id> and --file <path>");
+    }
+  });
+});
+
 describe("resetting a report's conversations", () => {
   const section = { level: 2, text: "結果", occurrence: 0 };
 
@@ -345,12 +385,14 @@ describe("resetting a report's conversations", () => {
     const thread = addUserMessage({ home: dir, reportPath: "/r/a.md", threadId: null, section, text: "q" });
     resetThreads({ home: dir, reportPath: "/r/a.md" });
     const script = join(import.meta.dir, "../reportboard.ts");
+    const body = join(dir, "reply.md");
+    writeFileSync(body, "late");
     for (const [lang, text] of [["en", "The user reset this conversation in the window"], ["ja", "このやり取りは窓でリセットされました"]]) {
-      const run = Bun.spawnSync(["bun", script, "--lang", lang, "reply", "--thread", thread.id, "late"], { env: { ...process.env, REPORTBOARD_HOME: dir } });
+      const run = Bun.spawnSync(["bun", script, "--lang", lang, "reply", "--thread", thread.id, "--file", body], { env: { ...process.env, REPORTBOARD_HOME: dir } });
       expect(run.exitCode).toBe(1);
       expect(run.stderr.toString()).toContain(text);
     }
-    const unknown = Bun.spawnSync(["bun", script, "--lang", "en", "reply", "--thread", "t-000000000000", "x"], { env: { ...process.env, REPORTBOARD_HOME: dir } });
+    const unknown = Bun.spawnSync(["bun", script, "--lang", "en", "reply", "--thread", "t-000000000000", "--file", body], { env: { ...process.env, REPORTBOARD_HOME: dir } });
     expect(unknown.stderr.toString()).toContain("Thread not found");
   });
 

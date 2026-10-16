@@ -6,7 +6,7 @@
 //   reportboard wait --target <name> [--timeout <sec>]   Wait until the user sends something to the AI from a section; print it as JSON
 //                                                      (a JSON array when several were queued)
 //   reportboard watch --target <name> [--timeout <sec>]  Keep receiving: print each message as one line of JSON (for Claude Code's Monitor)
-//   reportboard reply --thread <id> [--done] (<text> | --file <path>)   Answer in that thread. It shows up in the section it was sent from.
+//   reportboard reply --thread <id> [--done] --file <path>   Answer in that thread with the text in the file. It shows up in the section it was sent from.
 //                                                      --done on the last reply ends "the AI is working on it" in the window
 //   reportboard --close <name>                Close only the window with that name
 //   reportboard --list                        List the open named windows
@@ -52,7 +52,7 @@ type Board = { path: string };
 const MESSAGES = {
   ja: {
     usage:
-      "usage: reportboard [--lang ja|en] [--target <名前>] <file.md>\n       reportboard [--lang ja|en] wait --target <名前> [--timeout <秒>]\n       reportboard [--lang ja|en] watch --target <名前> [--timeout <秒>]\n       reportboard [--lang ja|en] reply --thread <id> [--done] (<本文> | --file <path>)\n       reportboard [--lang ja|en] --close <名前>\n       reportboard [--lang ja|en] --list",
+      "usage: reportboard [--lang ja|en] [--target <名前>] <file.md>\n       reportboard [--lang ja|en] wait --target <名前> [--timeout <秒>]\n       reportboard [--lang ja|en] watch --target <名前> [--timeout <秒>]\n       reportboard [--lang ja|en] reply --thread <id> [--done] --file <path>\n       reportboard [--lang ja|en] --close <名前>\n       reportboard [--lang ja|en] --list",
     badLang: (source: string, value: string) => `${source} は ja か en で指定してください: ${value}`,
     badTargetName: "--target の名前は英数字と . _ - だけで指定してください",
     oneFile: "開く Markdown ファイルを 1 つだけ指定してください",
@@ -68,7 +68,8 @@ const MESSAGES = {
     badTimeout: "--timeout は正の秒数で指定してください",
     windowClosed: (target: string) => `target=${target} のウィンドウが閉じられました`,
     waitTimeout: (target: string) => `target=${target} から指示が来ないまま --timeout が過ぎました`,
-    replyUsage: "reply は --thread <id> と、本文か --file <path> を指定してください",
+    replyUsage: "reply は --thread <id> と --file <path> を指定してください",
+    replyTextArg: "返事の本文は引数では渡せません。本文をファイルに書き、--file <path> で渡してください",
     threadNotFound: (id: string) => `スレッドが見つかりません: ${id}`,
     threadReset: (id: string) => `このやり取りは窓でリセットされました。返事は表示されません。このやり取りの作業はやめてください: ${id}`,
     loadFailed: (detail: string) => `窓は開きましたが、レポートを読み込めませんでした: ${detail}`,
@@ -76,7 +77,7 @@ const MESSAGES = {
     unread: (target: string, n: number) => `未読 ${n} 件: 窓から送られてまだ受け取っていないメッセージがあります。reportboard wait --target ${target} で受け取ってください`,
   },
   en: {
-    usage: "usage: reportboard [--lang ja|en] [--target <name>] <file.md>\n       reportboard [--lang ja|en] wait --target <name> [--timeout <seconds>]\n       reportboard [--lang ja|en] watch --target <name> [--timeout <seconds>]\n       reportboard [--lang ja|en] reply --thread <id> [--done] (<text> | --file <path>)\n       reportboard [--lang ja|en] --close <name>\n       reportboard [--lang ja|en] --list",
+    usage: "usage: reportboard [--lang ja|en] [--target <name>] <file.md>\n       reportboard [--lang ja|en] wait --target <name> [--timeout <seconds>]\n       reportboard [--lang ja|en] watch --target <name> [--timeout <seconds>]\n       reportboard [--lang ja|en] reply --thread <id> [--done] --file <path>\n       reportboard [--lang ja|en] --close <name>\n       reportboard [--lang ja|en] --list",
     badLang: (source: string, value: string) => `${source} must be ja or en: ${value}`,
     badTargetName: "--target names may use only letters, digits and . _ -",
     oneFile: "Give exactly one Markdown file to open",
@@ -92,7 +93,8 @@ const MESSAGES = {
     badTimeout: "--timeout must be a positive number of seconds",
     windowClosed: (target: string) => `The window target=${target} was closed`,
     waitTimeout: (target: string) => `No instruction came from target=${target} before --timeout`,
-    replyUsage: "reply needs --thread <id> and either the text or --file <path>",
+    replyUsage: "reply needs --thread <id> and --file <path>",
+    replyTextArg: "reply does not take the text as an argument. Write it to a file and pass --file <path>",
     threadNotFound: (id: string) => `Thread not found: ${id}`,
     threadReset: (id: string) => `The user reset this conversation in the window. The reply is not shown; stop working on it: ${id}`,
     loadFailed: (detail: string) => `The window opened but could not read the report: ${detail}`,
@@ -162,9 +164,11 @@ function reply(args: string[]): number {
     else if (args[i] === "--file") filePath = args[++i] ?? null;
     else words.push(args[i]);
   }
-  if (threadId === null || (filePath === null) === (words.length === 0)) usageError(i18n.M.replyUsage);
-  if (filePath !== null && !existsSync(resolve(filePath))) fatal(i18n.M.notFound(resolve(filePath)));
-  const text = (filePath === null ? words.join(" ") : readFileSync(resolve(filePath), "utf8")).trim();
+  // The text comes only from a file, so it never passes through shell quoting
+  if (words.length > 0) usageError(i18n.M.replyTextArg);
+  if (threadId === null || filePath === null) usageError(i18n.M.replyUsage);
+  if (!existsSync(resolve(filePath))) fatal(i18n.M.notFound(resolve(filePath)));
+  const text = readFileSync(resolve(filePath), "utf8").trim();
   if (text === "") fatal(i18n.M.emptyReply);
   const result = addReply({ home: HOME, threadId, text, done });
   if (result === null) fatal(wasReset(HOME, threadId) ? i18n.M.threadReset(threadId) : i18n.M.threadNotFound(threadId));

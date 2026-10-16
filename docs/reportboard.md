@@ -52,7 +52,7 @@ On the agent's side:
 ```sh
 reportboard watch --target <name> [--timeout <seconds>]   # keeps running; one line of JSON per message (Claude Code: run it with Monitor)
 reportboard wait --target <name> [--timeout <seconds>]    # once: what is queued, or the next message (for agents without a monitor)
-reportboard reply --thread <id> [--done] "answer"   # or: --file <path>. --done on the last reply
+reportboard reply --thread <id> [--done] --file <path>   # the answer is the text in the file. --done on the last reply
 ```
 
 `watch` prints every message as one line of JSON as it comes, starting with the ones already queued, and runs until the window is closed (rc 3). `wait` prints what you sent as JSON and exits; when several messages were queued it prints all of them as a JSON array, oldest first. One message:
