@@ -56,8 +56,11 @@
     color: var(--fg);
     font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
     font-size: 13px;
-    height: 100%;
   }
+  /* body は height でなく min-height にする。sticky の #header は body の中でしか留まれないので、
+     body が窓の高さで終わると、窓 1 枚分より下へスクロールしたときヘッダーが一緒に流れて消える */
+  html { height: 100%; }
+  body { min-height: 100%; }
 
   /* ---- background cycle target (card image area / lightbox) ---- */
   html[data-bg="dark"] body,
