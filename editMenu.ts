@@ -1,10 +1,11 @@
 // Builds the Edit menu (Undo, Redo, Cut, Copy, Paste, Select All) in the macOS menu bar.
 //
 // On macOS, ⌘Z / ⌘C / ⌘V and the like reach WKWebView through menu items. webview (the library webview-bun uses)
-// creates no menu, so without this these shortcuts do nothing in the editor. Each item's action goes to the
+// creates no menu, so without this these shortcuts do nothing in the window. Each item's action goes to the
 // first responder (the focused WKWebView) and becomes WebKit's standard undo / clipboard operation.
 //
-// Keys that textboard.html handles itself, such as ⌘W and ⌘S, are not put in the menu (they would no longer reach the page).
+// Keys that a page handles itself, such as ⌘W and ⌘S in textboard.html and ⌘W in reportboard.html, are not put in the menu
+// (they would no longer reach the page).
 import { dlopen, FFIType, ptr, type Pointer } from "bun:ffi";
 
 const LIBOBJC = "/usr/lib/libobjc.A.dylib";
@@ -47,7 +48,7 @@ function addItem(menu: Pointer, title: string, action: string | null, key: strin
   return send3(menu, sel("addItemWithTitle:action:keyEquivalent:"), nsString(title), action ? sel(action) : null, nsString(key)) as Pointer;
 }
 
-export function installEditMenu(lang: "ja" | "en") {
+export function installEditMenu(lang: "ja" | "en", appName: string) {
   const t =
     lang === "ja"
       ? { edit: "編集", undo: "取り消す", redo: "やり直す", cut: "カット", copy: "コピー", paste: "ペースト", selectAll: "すべてを選択" }
@@ -58,7 +59,7 @@ export function installEditMenu(lang: "ja" | "en") {
 
   // The first menu in the bar is treated as the application menu, so put an empty one first, then add Edit
   const appItem = addItem(mainMenu, "", null, "");
-  send1(appItem, sel("setSubmenu:"), newMenu("textboard"));
+  send1(appItem, sel("setSubmenu:"), newMenu(appName));
 
   const editItem = addItem(mainMenu, t.edit, null, "");
   const edit = newMenu(t.edit);

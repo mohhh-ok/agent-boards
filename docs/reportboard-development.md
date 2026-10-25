@@ -22,6 +22,7 @@ Notes for changing the window itself. For usage, see [reportboard.md](reportboar
 - Received: when `wait` or `watch` takes an entry, it writes `receivedAt` on that user message in the threads file (`markReceived`). `reply --done` writes `doneAt`, and each `wait` writes its start time to `targets/<name>.wait-started`. Each thread reaches the page with `state` (`threadState`): "sent", "received" (the page adds the "writing a reply" line), "working" (after a reply, the page adds "still working" under it) or null once done or a later `wait` started. The poll re-sends the threads when the wait start time changes
 - Reset: `__reportboardReset()` empties the report's threads file under its lock, keeping the removed ids in `resetThreadIds` (so `reply` can tell the agent; `wasReset`), and withdraws the outbox entries of every target whose `file` is the report (`outbox.discard`). The change marks live only in the page (`changed`), so the page clears them itself
 - Links: `__reportboardOpen(href)` opens http(s)/mailto with `open`, and only reveals existing local files (`open -R`), so a link cannot launch an app or a script
+- Edit menu: `editMenu.ts` (shared with textboard) builds the macOS Edit menu, which is how `⌘C` / `⌘V` etc. reach WKWebView. Keys the page handles itself (`⌘W`) must not be added to the menu, or they no longer reach the page
 - Do not `await` a bound function that returns nothing: its promise may never settle
 
 ## Verifying

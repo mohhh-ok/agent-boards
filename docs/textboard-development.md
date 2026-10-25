@@ -8,7 +8,7 @@ Notes for changing the window itself. For usage, see [textboard.md](textboard.md
 - `textboard.html`: the whole page (HTML/CSS/JS, no external dependencies besides `anchor.js` and `enterKey.js`)
 - `anchor.js`: keeps comments on their passage. Shared by the page (`<script>`) and the tests (`require`)
 - `enterKey.js`: Enter sends or confirms, Shift+Enter starts a new line, the Enter that confirms IME input does neither. Shared by textboard and reportboard (`<script>`) and the tests (`require`)
-- `editMenu.ts`: builds the macOS Edit menu through `bun:ffi`
+- `editMenu.ts`: builds the macOS Edit menu through `bun:ffi` (reportboard uses it too)
 - `test/`: `bun test`
 
 ## How it works

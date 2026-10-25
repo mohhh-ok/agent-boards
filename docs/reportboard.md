@@ -90,6 +90,13 @@ A `reply` to a conversation the user reset fails with rc 1, saying the conversat
 
 Conversations are kept in `~/.reportboard/threads/` (one file per report, named by the hash of its path), not next to the report. They survive reloading and reopening. Each one stays with its heading and row when the agent rewrites the report: it follows a heading whose numbers changed ("— 51 days" → "— 49 days") and a row that moved under another heading. When its row is gone, it stays under its heading, saying where it started; when its heading is gone too, it moves to "Conversations whose heading is gone" under the title, and the top bar says how many there are. The conversation you are looking at stays where it is on the screen. Moving or renaming the report detaches its conversations.
 
+## Keys
+
+| Key | Action |
+| --- | --- |
+| `⌘C` / `⌘V`, `⌘X`, `⌘A`, `⌘Z` / `⌘⇧Z` | Copy / paste, cut, select all, undo / redo (from the Edit menu). Copy text from the report and paste it into an "Edit with AI" box |
+| `⌘W` | Close the window |
+
 ## Language
 
 Window and messages are in Japanese or English: `--lang ja|en` > `REPORTBOARD_LANG` > the first language in macOS System Settings.

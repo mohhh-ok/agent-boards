@@ -30,6 +30,7 @@ import { randomUUID } from "node:crypto";
 import { applyLang, createI18n, type Lang } from "./lib/lang.ts";
 import { createWindowHost, isValidTargetName } from "./lib/windows.ts";
 import { renderReport } from "./lib/report.ts";
+import { installEditMenu } from "./editMenu.ts";
 import { OUTBOX_DIR_NAME, createOutbox } from "./lib/outbox.ts";
 import { addReply, addUserMessage, markReceived, placeThreads, readThreads, rememberPlaces, resetThreads, threadState, threadsPath, wasReset, type SectionRef } from "./lib/threads.ts";
 
@@ -42,7 +43,7 @@ const HOME = process.env.REPORTBOARD_HOME || join(homedir(), ".reportboard");
 // Larger files are not treated as a report
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 
-type WindowConfig = { target: string | null; url: string; requestId: string };
+type WindowConfig = { target: string | null; url: string; requestId: string; lang: Lang };
 // failed: why the page could not show the report (the window stays open with the message)
 type Ack = { pid: number; failed: string | null };
 // What to show for one request. Written to boards/<rid>.json; the page reads it with __reportboardLoad(rid)
@@ -221,7 +222,7 @@ async function showReport(request: { target: string | null; path: string }): Pro
   if (existingPid !== null && request.target !== null) {
     host.writeReplaceRequest(request.target, { requestId, url, pid: existingPid });
   } else {
-    const config: WindowConfig = { target: request.target, url, requestId };
+    const config: WindowConfig = { target: request.target, url, requestId, lang: i18n.lang };
     ({ child, logPath } = host.spawnWindow({ requestId, config }));
   }
 
@@ -291,6 +292,7 @@ function runWindow(config: WindowConfig) {
   const webview = new Webview();
   webview.title = config.target === null ? "reportboard" : `reportboard — ${config.target}`;
   webview.size = { width: 1440, height: 900, hint: SizeHint.NONE };
+  installEditMenu(config.lang, "reportboard");
   // For verification: inject a script that drives the page in the real window (docs/reportboard-development.md). Not used normally
   const devInit = process.env.REPORTBOARD_DEV_INIT_SCRIPT;
   if (devInit) webview.init(readFileSync(devInit, "utf8"));

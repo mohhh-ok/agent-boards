@@ -218,7 +218,7 @@ function runWindow(config: WindowConfig) {
   const webview = new Webview();
   webview.title = `textboard — ${config.target}`;
   webview.size = { width: 1180, height: 860, hint: SizeHint.NONE };
-  installEditMenu(config.lang);
+  installEditMenu(config.lang, "textboard");
   // For verification: inject a script that drives the page in the real window (docs/development.md). Not used normally
   const devInit = process.env.TEXTBOARD_DEV_INIT_SCRIPT;
   if (devInit) webview.init(readFileSync(devInit, "utf8"));
